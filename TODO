@@ -1,0 +1,9 @@
+TODO:
+    -   Don't write every second of recorded data. Buffer it and write every 30
+    or 60 seconds.
+    -   Allow other samples rates.
+    -   Allow multiple channels.
+    -   Change threshold along with samples.
+    -   GUI:
+        -   Save files. (diff names)
+        -   wx or GTK interface.
