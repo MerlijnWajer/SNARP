@@ -23,8 +23,8 @@ nchan, sampwidth, framerate, nframes, comp, compname = f.getparams()
 print 'Sample / s:', framerate
 
 if framerate != 8000 or nchan != 1:
-    print 'Format currently supported. Only supported format is 8000 frames and 1
-channel'
+    print 'Format currently not supported.'\
+            'Only supported format is 8000 frames and 1 channel'
 
 
 # Open file we will write to.
