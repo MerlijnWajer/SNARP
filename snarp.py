@@ -9,6 +9,10 @@ except ImportError:
     import StringIO
 
 
+INPUT_CMD = ['arecord']
+#INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
+
+
 class SinkInput(object):
     """
         TODO: arecord will keep on running. We need to drop frames when it's
@@ -17,10 +21,10 @@ class SinkInput(object):
         switch to gstreamer.
     """
 
-    def __init__(self):
+    def __init__(self, command):
         # Arecord just dumps the raw wav to stdout. We will use this
         # to read from with out wave module.
-        self.p = subprocess.Popen(['arecord'], stdout=subprocess.PIPE)
+        self.p = subprocess.Popen(command, stdout=subprocess.PIPE)
         # Open the pipe.
         self.f = wave.open(self.p.stdout)
         self.nchan, self.sampwidth, self.framerate, self.nframes, self.comp, \
@@ -46,13 +50,11 @@ class BufferedClassFile(object):
     def get_stream(self):
         return self.s
 
-#p = subprocess.Popen(['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1'], \
-#                stdout=subprocess.PIPE)
 
 ofile = 'test.wav'
 
 
-inp = SinkInput()
+inp = SinkInput(INPUT_CMD)
 
 # Print audio setup
 print inp.f.getparams()
