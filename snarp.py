@@ -98,7 +98,12 @@ try:
     
         lasthigh = high
 
-finally:
+except KeyboardInterrupt:
     inp.f.close()
+    # TODO: encapsulate the following logic in the destuctor of BufferedClassFile
+    buf.get_stream().flush()
+    dump = open(ofile, 'w')
+    dump.write(buf.get_stream().getvalue())
+    dump.close()
     o.close()
     print len(buf.get_stream().getvalue())
