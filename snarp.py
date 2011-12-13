@@ -65,7 +65,8 @@ INPUT_SRC = INPUTS["default"]
 SILENCE_MIN = INPUT_SRC['silence_min']
 SILENCE_MAX = INPUT_SRC['silence_max']
 
-INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
+INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], \
+    '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
 #INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
 
 
@@ -95,9 +96,11 @@ class SinkInput(object):
     def get_output(self):
         return self.f
 
+
 class NoiseFilter(object):
     def __init__(self):
         pass
+
 
 class BufferedClassFile(object):
     def __init__(self):
@@ -108,17 +111,18 @@ class BufferedClassFile(object):
 
 
 def frame_to_sample(frame):
+    sample_storage_bytes = INPUT_SRC['format']['sample_width_storage_bytes']
+
     # handling only the first channel
-    frame_data = frame[0:INPUT_SRC['format']['sample_width_storage_bytes']]
+    frame_data = frame[0:sample_storage_bytes]
 
     # Padding all samples to 4byte integer
     if INPUT_SRC['format']['sample_width_storage_bytes'] < 4:
 
         if INPUT_SRC['format']['sample_endianness'] == 'little':
-            frame_data_MSB = frame_data[INPUT_SRC['format']['sample_width_storage_bytes'] - 1]
+            frame_data_MSB = frame_data[sample_storage_bytes - 1]
         else:
             frame_data_MSB = data[0]
-
 
         # Check if positive or negative and set the MSB accordigly
         if ord(frame_data_MSB) & 0x80:
@@ -128,13 +132,12 @@ def frame_to_sample(frame):
             padding_MSB = '\x00'
 
         # Set the middle padding
-        padding = '\x00' * (4 - INPUT_SRC['format']['sample_width_storage_bytes'] - 1)
+        padding = '\x00' * (4 - sample_storage_bytes - 1)
 
         if INPUT_SRC['format']['sample_endianness'] == 'little':
             frame_data = frame_data + padding + padding_MSB
         else:
             frame_data = padding_MSB + padding + frame_data
-
 
     fmt = ''
     if INPUT_SRC['format']['sample_endianness'] == 'little':
@@ -153,11 +156,12 @@ def frame_to_sample(frame):
 
 def get_samples(frames):
     # chunk iteration taken from
-    # http://stackoverflow.com/questions/434287/what-is-the-most-pythonic-way-to-iterate-over-a-list-in-chunks
+    # http://stackoverflow.com/questions/434287
     samples = []
-    chunkSize = INPUT_SRC['format']['sample_width_storage_bytes'] * INPUT_SRC['channels']
+    chunkSize = INPUT_SRC['format']['sample_width_storage_bytes'] * \
+            INPUT_SRC['channels']
     for i in xrange(0, len(frames), chunkSize):
-        frame = frames[i:i+chunkSize]
+        frame = frames[i:i + chunkSize]
         sample = frame_to_sample(frame)
         samples.append(sample)
 
@@ -182,14 +186,14 @@ o.setparams((inp.nchan, inp.sampwidth, inp.framerate, 0, 'NONE', \
 
 high, lasthigh = False, False
 
-    
+
 try:
     while True:
         # Read 1 second of audio
         a = inp.f.readframes(inp.framerate * inp.nchan)
         b = get_samples(a)
         _min, _max = min(b), max(b)
-    
+
         # Print bounds
         print 'min', _min
         print 'max', _max
@@ -199,16 +203,17 @@ try:
             print "Recording..."
         else:
             high = False
-    
+
         # Write always if either is True.
         if lasthigh or high:
             o.writeframes(a)
-    
+
         lasthigh = high
 
 except KeyboardInterrupt:
     inp.f.close()
-    # TODO: encapsulate the following logic in the destuctor of BufferedClassFile
+    # TODO: encapsulate the following logic in the destuctor
+    #       of BufferedClassFile
     buf.get_stream().flush()
     dump = open(ofile, 'w')
     dump.write(buf.get_stream().getvalue())
