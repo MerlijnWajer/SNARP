@@ -8,8 +8,64 @@ try:
 except ImportError:
     import StringIO
 
+import struct
 
-INPUT_CMD = ['arecord']
+# Parameters of S24_3LE
+#FORMAT_SAMPLE_SIGNED=True
+#FORMAT_SAMPLE_ENDIANNESS='little' # or 'big'
+# Sample width and sample storage width can be different:
+# FORMAT_SAMPLE_WIDTH is the resolution of the sample
+# FORMAT_SAMPLE_WIDTH_STORAGE is the storage format, how many bytes are used to
+# represent a sample of resolution FORMAT_SAMPLE_WIDTH
+#
+# A _frame_ width will be (FORMAT_SAMPLE_WIDTH_STORAGE * CHANNELS)
+#
+# Examples of formats with the same sample with but different storage width:
+#  S24_LE  -> FORMAT_SAMPLE_WIDTH = 24, FORMAT_SAMPLE_STORAGE_WIDTH_BYTES = 4
+#  S24_3LE -> FORMAT_SAMPLE_WIDTH = 24, FORMAT_SAMPLE_STORAGE_WIDTH_BYTES = 3
+#FORMAT_SAMPLE_WIDTH_BITS=24
+#FORMAT_SAMPLE_STORAGE_WIDTH_BYTES=3
+
+
+INPUTS = {
+    'default' : {
+        'device'        : 'hw:0,0',
+        'extra_options' : [],
+        'sample_rate'   : 8000,
+        'channels'      : 1,
+        'format'        : {
+            'sample_signed'              : False,
+            'sample_endianness'          : 'little',
+            'sample_width_bits'          : 8,
+            'sample_width_storage_bytes' : 1
+        },
+        'silence_min' : 120,
+        'silence_max' : 135
+    },
+    'podcaster' : {
+        'device' : 'front:CARD=Podcaster,DEV=0',
+        'extra_options' : ['-f', 'S24_3LE'],
+        'sample_rate'   : 48000,
+        'channels'      : 1,
+        'format'        : {
+            'sample_signed'              : True,
+            'sample_endianness'          : 'little',
+            'sample_width_bits'          : 24,
+            'sample_width_storage_bytes' : 3
+        },
+        'silence_min' : -1500000,
+        'silence_max' :  1500000
+    }
+}
+
+
+INPUT_SRC = INPUTS["default"]
+#INPUT_SRC = INPUTS["podcaster"]
+
+SILENCE_MIN = INPUT_SRC['silence_min']
+SILENCE_MAX = INPUT_SRC['silence_max']
+
+INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
 #INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
 
 
@@ -51,8 +107,64 @@ class BufferedClassFile(object):
         return self.s
 
 
-ofile = 'test.wav'
+def frame_to_sample(frame):
+    # handling only the first channel
+    frame_data = frame[0:INPUT_SRC['format']['sample_width_storage_bytes']]
 
+    # Padding all samples to 4byte integer
+    if INPUT_SRC['format']['sample_width_storage_bytes'] < 4:
+
+        if INPUT_SRC['format']['sample_endianness'] == 'little':
+            frame_data_MSB = frame_data[INPUT_SRC['format']['sample_width_storage_bytes'] - 1]
+        else:
+            frame_data_MSB = data[0]
+
+
+        # Check if positive or negative and set the MSB accordigly
+        if ord(frame_data_MSB) & 0x80:
+            padding_MSB = '\xff'
+            frame_data_MSB = chr(ord(frame_data_MSB) & ~0x80)
+        else:
+            padding_MSB = '\x00'
+
+        # Set the middle padding
+        padding = '\x00' * (4 - INPUT_SRC['format']['sample_width_storage_bytes'] - 1)
+
+        if INPUT_SRC['format']['sample_endianness'] == 'little':
+            frame_data = frame_data + padding + padding_MSB
+        else:
+            frame_data = padding_MSB + padding + frame_data
+
+
+    fmt = ''
+    if INPUT_SRC['format']['sample_endianness'] == 'little':
+        fmt += '<'
+    else:
+        fmt += '>'
+
+    if INPUT_SRC['format']['sample_signed']:
+        fmt += 'l'
+    else:
+        fmt += 'L'
+
+    sample = struct.unpack(fmt, frame_data)
+    return sample[0]
+
+
+def get_samples(frames):
+    # chunk iteration taken from
+    # http://stackoverflow.com/questions/434287/what-is-the-most-pythonic-way-to-iterate-over-a-list-in-chunks
+    samples = []
+    chunkSize = INPUT_SRC['format']['sample_width_storage_bytes'] * INPUT_SRC['channels']
+    for i in xrange(0, len(frames), chunkSize):
+        frame = frames[i:i+chunkSize]
+        sample = frame_to_sample(frame)
+        samples.append(sample)
+
+    return samples
+
+
+ofile = 'test.wav'
 
 inp = SinkInput(INPUT_CMD)
 
@@ -60,10 +172,6 @@ inp = SinkInput(INPUT_CMD)
 print inp.f.getparams()
 
 print 'Sample / s:', inp.framerate
-
-if inp.framerate != 8000 or inp.nchan != 1:
-    print 'Format currently not supported.'\
-            'Only supported format is 8000 frames and 1 channel'
 
 buf = BufferedClassFile()
 
@@ -77,18 +185,18 @@ high, lasthigh = False, False
     
 try:
     while True:
-        # Read 1 second
-        a = inp.f.readframes(inp.framerate)
-        b = [ord(x) for x in a]
+        # Read 1 second of audio
+        a = inp.f.readframes(inp.framerate * inp.nchan)
+        b = get_samples(a)
         _min, _max = min(b), max(b)
     
         # Print bounds
         print 'min', _min
         print 'max', _max
-    
-        # TODO: The gate should obviously be configurable.
-        if _max > 135 and _min < 120:
+
+        if _max > SILENCE_MAX and _min < SILENCE_MIN:
             high = True
+            print "Recording..."
         else:
             high = False
     
