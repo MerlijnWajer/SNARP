@@ -202,8 +202,13 @@ o = wave.open(buf.get_stream(), 'w')
 o.setparams((inp.nchan, inp.sampwidth, inp.framerate, 0, 'NONE', \
             'not compressed'))
 
-high, lasthigh = False, False
+high = False
 
+# lasthigh is used for post-rolling (save one second _after_ the one with noise)
+lasthigh = False
+
+# oldbuf is for pre-rolling (save one second _before_ the one with noise)
+oldbuf = ''
 
 try:
     while True:
@@ -218,15 +223,28 @@ try:
 
         if _max > SILENCE_MAX and _min < SILENCE_MIN:
             high = True
-            print "Recording..."
         else:
             high = False
 
         # Write always if either is True.
         if lasthigh or high:
+
+            if not lasthigh:
+                print "Pre-rolling..."
+                o.writeframes(oldbuf)
+
+            if high:
+                print "...Recording..."
+            else:
+                print "...Post-rolling"
+
             o.writeframes(a)
 
+        # prepare for post-roll
         lasthigh = high
+        
+        # prepare for pre-roll
+        oldbuf = a
 
 except KeyboardInterrupt:
     inp.f.close()
