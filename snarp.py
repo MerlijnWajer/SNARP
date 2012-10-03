@@ -140,7 +140,7 @@ def frame_to_sample(frame):
         if INPUT_SRC['format']['sample_endianness'] == 'little':
             frame_data_MSB = frame_data[sample_storage_bytes - 1]
         else:
-            frame_data_MSB = data[0]
+            frame_data_MSB = frame_data[0]
 
         # Check if positive or negative and set the MSB accordigly
         if ord(frame_data_MSB) & 0x80:
