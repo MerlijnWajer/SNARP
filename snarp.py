@@ -18,6 +18,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
 import subprocess
 import wave
 import time
@@ -195,9 +198,8 @@ def main(*argv):
     input_wave = wave.open(input_file)
 
     # Print audio setup
-    print input_wave.getparams()
-
-    print 'Sample / s:', input_wave.getframerate()
+    logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
+    logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
     buf = BufferedClassFile()
 
@@ -234,8 +236,7 @@ def main(*argv):
             _min, _max = min(b), max(b)
 
             # Print bounds
-            print 'min', _min
-            print 'max', _max
+            logging.debug('min {0}, max {1}'.format(_min, _max))
 
             if _max > SILENCE_MAX and _min < SILENCE_MIN:
                 high = True
@@ -246,13 +247,13 @@ def main(*argv):
             if lasthigh or high:
 
                 if not lasthigh:
-                    print "Pre-rolling..."
+                    logging.debug('Pre-rolling...')
                     o.writeframes(oldbuf)
 
                 if high:
-                    print "...Recording..."
+                    logging.debug('...Recording...')
                 else:
-                    print "...Post-rolling"
+                    logging.debug('...Post-rolling')
 
                 o.writeframes(a)
 
@@ -270,7 +271,9 @@ def main(*argv):
         with open(output_filename, 'wb') as output_file:
             output_file.write(buf.get_stream().getvalue())
         o.close()
-        print len(buf.get_stream().getvalue())
+        logging.debug('Wrote {0} bytes.'.format(
+            len(buf.get_stream().getvalue())
+        ))
     return 0
 
 if __name__ == '__main__':
