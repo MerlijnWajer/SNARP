@@ -89,30 +89,6 @@ INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], \
     '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
 #INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
 
-
-class SinkInput(object):
-    """
-        TODO: arecord will keep on running. We need to drop frames when it's
-        paused or when just not being read. Perhaps only keep recent frames?
-        Also, arecord is a rather primitive way to read input. Might want to
-        switch to gstreamer.
-    """
-
-    def __init__(self, input_file):
-        self.f = wave.open(input_file)
-        self.nchan, self.sampwidth, self.framerate, self.nframes, self.comp, \
-                self.compname = self.f.getparams()
-
-    def start(self):
-        pass
-
-    def stop(self):
-        pass
-
-    def get_output(self):
-        return self.f
-
-
 class NoiseFilter(object):
     def __init__(self):
         pass
@@ -216,19 +192,25 @@ def main(*argv):
     else:
         input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
 
-    inp = SinkInput(input_file)
+    input_wave = wave.open(input_file)
 
     # Print audio setup
-    print inp.f.getparams()
+    print input_wave.getparams()
 
-    print 'Sample / s:', inp.framerate
+    print 'Sample / s:', input_wave.getframerate()
 
     buf = BufferedClassFile()
 
     # Open file we will write to.
     o = wave.open(buf.get_stream(), 'w')
-    o.setparams((inp.nchan, inp.sampwidth, inp.framerate, 0, 'NONE', \
-                'not compressed'))
+    o.setparams((
+        input_wave.getnchannels(),
+        input_wave.getsampwidth(),
+        input_wave.getframerate(),
+        0,
+        'NONE',
+        'not compressed'
+    ))
 
     high = False
 
@@ -241,7 +223,9 @@ def main(*argv):
     try:
         while True:
             # Read 1 second of audio
-            a = inp.f.readframes(inp.framerate * inp.nchan)
+            a = input_wave.readframes(
+                input_wave.getframerate() * input_wave.getnchannels()
+            )
             b = get_samples(a)
 
             if len(b) == 0:
@@ -279,7 +263,7 @@ def main(*argv):
             oldbuf = a
 
     except (KeyboardInterrupt, EOFError):
-        inp.f.close()
+        input_wave.close()
         # TODO: encapsulate the following logic in the destuctor
         #       of BufferedClassFile
         buf.get_stream().flush()
