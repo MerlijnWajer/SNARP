@@ -28,6 +28,7 @@ except ImportError:
 
 import struct
 import sys
+import argparse
 
 # Parameters of S24_3LE
 #FORMAT_SAMPLE_SIGNED=True
@@ -97,12 +98,8 @@ class SinkInput(object):
         switch to gstreamer.
     """
 
-    def __init__(self, command):
-        # Arecord just dumps the raw wav to stdout. We will use this
-        # to read from with out wave module.
-        self.p = subprocess.Popen(command, stdout=subprocess.PIPE)
-        # Open the pipe.
-        self.f = wave.open(self.p.stdout)
+    def __init__(self, input_file):
+        self.f = wave.open(input_file)
         self.nchan, self.sampwidth, self.framerate, self.nframes, self.comp, \
                 self.compname = self.f.getparams()
 
@@ -186,11 +183,40 @@ def get_samples(frames):
 
     return samples
 
+def main(*argv):
+    parser = argparse.ArgumentParser(description='Remove silence from wave audio data.')
+    parser.add_argument(
+        '-i',
+        '--input_filename', 
+        default='-',
+        help='Filename to read. Defaults to - for STDIN.'
+    )
+    parser.add_argument(
+        'output_filename', 
+        default='-',
+        help='Filename to write to.'
+    )
+    parser.add_argument(
+        '-a',
+        '--arecord', 
+        action='store_true',
+        help='Read from arecord output. Overrides -i.'
+    )
+    args = parser.parse_args(argv[1:])
 
-def main(*args):
-    ofile = 'test.wav'
+    input_filename = args.input_filename
+    output_filename = args.output_filename
 
-    inp = SinkInput(INPUT_CMD)
+    if args.arecord:
+        # Arecord just dumps the raw wav to stdout. We will use this
+        # to read from with out wave module.
+        p = subprocess.Popen(INPUT_CMD, stdout=subprocess.PIPE)
+        # Open the pipe.
+        input_file = p.stdout
+    else:
+        input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
+
+    inp = SinkInput(input_file)
 
     # Print audio setup
     print inp.f.getparams()
@@ -217,6 +243,10 @@ def main(*args):
             # Read 1 second of audio
             a = inp.f.readframes(inp.framerate * inp.nchan)
             b = get_samples(a)
+
+            if len(b) == 0:
+                raise EOFError
+
             _min, _max = min(b), max(b)
 
             # Print bounds
@@ -248,14 +278,13 @@ def main(*args):
             # prepare for pre-roll
             oldbuf = a
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         inp.f.close()
         # TODO: encapsulate the following logic in the destuctor
         #       of BufferedClassFile
         buf.get_stream().flush()
-        dump = open(ofile, 'w')
-        dump.write(buf.get_stream().getvalue())
-        dump.close()
+        with open(output_filename, 'wb') as output_file:
+            output_file.write(buf.get_stream().getvalue())
         o.close()
         print len(buf.get_stream().getvalue())
     return 0
