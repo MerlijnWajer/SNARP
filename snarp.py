@@ -27,6 +27,7 @@ except ImportError:
     import StringIO
 
 import struct
+import sys
 
 # Parameters of S24_3LE
 #FORMAT_SAMPLE_SIGNED=True
@@ -186,73 +187,79 @@ def get_samples(frames):
     return samples
 
 
-ofile = 'test.wav'
+def main(*args):
+    ofile = 'test.wav'
 
-inp = SinkInput(INPUT_CMD)
+    inp = SinkInput(INPUT_CMD)
 
-# Print audio setup
-print inp.f.getparams()
+    # Print audio setup
+    print inp.f.getparams()
 
-print 'Sample / s:', inp.framerate
+    print 'Sample / s:', inp.framerate
 
-buf = BufferedClassFile()
+    buf = BufferedClassFile()
 
-# Open file we will write to.
-o = wave.open(buf.get_stream(), 'w')
-o.setparams((inp.nchan, inp.sampwidth, inp.framerate, 0, 'NONE', \
-            'not compressed'))
+    # Open file we will write to.
+    o = wave.open(buf.get_stream(), 'w')
+    o.setparams((inp.nchan, inp.sampwidth, inp.framerate, 0, 'NONE', \
+                'not compressed'))
 
-high = False
+    high = False
 
-# lasthigh is used for post-rolling (save one second _after_ the one with noise)
-lasthigh = False
+    # lasthigh is used for post-rolling (save one second _after_ the one with noise)
+    lasthigh = False
 
-# oldbuf is for pre-rolling (save one second _before_ the one with noise)
-oldbuf = ''
+    # oldbuf is for pre-rolling (save one second _before_ the one with noise)
+    oldbuf = ''
 
-try:
-    while True:
-        # Read 1 second of audio
-        a = inp.f.readframes(inp.framerate * inp.nchan)
-        b = get_samples(a)
-        _min, _max = min(b), max(b)
+    try:
+        while True:
+            # Read 1 second of audio
+            a = inp.f.readframes(inp.framerate * inp.nchan)
+            b = get_samples(a)
+            _min, _max = min(b), max(b)
 
-        # Print bounds
-        print 'min', _min
-        print 'max', _max
+            # Print bounds
+            print 'min', _min
+            print 'max', _max
 
-        if _max > SILENCE_MAX and _min < SILENCE_MIN:
-            high = True
-        else:
-            high = False
-
-        # Write always if either is True.
-        if lasthigh or high:
-
-            if not lasthigh:
-                print "Pre-rolling..."
-                o.writeframes(oldbuf)
-
-            if high:
-                print "...Recording..."
+            if _max > SILENCE_MAX and _min < SILENCE_MIN:
+                high = True
             else:
-                print "...Post-rolling"
+                high = False
 
-            o.writeframes(a)
+            # Write always if either is True.
+            if lasthigh or high:
 
-        # prepare for post-roll
-        lasthigh = high
-        
-        # prepare for pre-roll
-        oldbuf = a
+                if not lasthigh:
+                    print "Pre-rolling..."
+                    o.writeframes(oldbuf)
 
-except KeyboardInterrupt:
-    inp.f.close()
-    # TODO: encapsulate the following logic in the destuctor
-    #       of BufferedClassFile
-    buf.get_stream().flush()
-    dump = open(ofile, 'w')
-    dump.write(buf.get_stream().getvalue())
-    dump.close()
-    o.close()
-    print len(buf.get_stream().getvalue())
+                if high:
+                    print "...Recording..."
+                else:
+                    print "...Post-rolling"
+
+                o.writeframes(a)
+
+            # prepare for post-roll
+            lasthigh = high
+            
+            # prepare for pre-roll
+            oldbuf = a
+
+    except KeyboardInterrupt:
+        inp.f.close()
+        # TODO: encapsulate the following logic in the destuctor
+        #       of BufferedClassFile
+        buf.get_stream().flush()
+        dump = open(ofile, 'w')
+        dump.write(buf.get_stream().getvalue())
+        dump.close()
+        o.close()
+        print len(buf.get_stream().getvalue())
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main(*sys.argv))
+
