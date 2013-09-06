@@ -162,39 +162,7 @@ def get_samples(frames):
 
     return samples
 
-def main(*argv):
-    parser = argparse.ArgumentParser(description='Remove silence from wave audio data.')
-    parser.add_argument(
-        '-i',
-        '--input_filename', 
-        default='-',
-        help='Filename to read. Defaults to - for STDIN.'
-    )
-    parser.add_argument(
-        'output_filename', 
-        default='-',
-        help='Filename to write to.'
-    )
-    parser.add_argument(
-        '-a',
-        '--arecord', 
-        action='store_true',
-        help='Read from arecord output. Overrides -i.'
-    )
-    args = parser.parse_args(argv[1:])
-
-    input_filename = args.input_filename
-    output_filename = args.output_filename
-
-    if args.arecord:
-        # Arecord just dumps the raw wav to stdout. We will use this
-        # to read from with out wave module.
-        p = subprocess.Popen(INPUT_CMD, stdout=subprocess.PIPE)
-        # Open the pipe.
-        input_file = p.stdout
-    else:
-        input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
-
+def remove_silences(input_file, output_filename):
     input_wave = wave.open(input_file)
 
     # Print audio setup
@@ -274,6 +242,41 @@ def main(*argv):
         logging.debug('Wrote {0} bytes.'.format(
             len(buf.get_stream().getvalue())
         ))
+
+def main(*argv):
+    parser = argparse.ArgumentParser(description='Remove silence from wave audio data.')
+    parser.add_argument(
+        '-i',
+        '--input_filename', 
+        default='-',
+        help='Filename to read. Defaults to - for STDIN.'
+    )
+    parser.add_argument(
+        'output_filename', 
+        default='-',
+        help='Filename to write to.'
+    )
+    parser.add_argument(
+        '-a',
+        '--arecord', 
+        action='store_true',
+        help='Read from arecord output. Overrides -i.'
+    )
+    args = parser.parse_args(argv[1:])
+
+    input_filename = args.input_filename
+    output_filename = args.output_filename
+
+    if args.arecord:
+        # Arecord just dumps the raw wav to stdout. We will use this
+        # to read from with out wave module.
+        p = subprocess.Popen(INPUT_CMD, stdout=subprocess.PIPE)
+        # Open the pipe.
+        input_file = p.stdout
+    else:
+        input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
+
+    remove_silences(input_file, output_filename)
     return 0
 
 if __name__ == '__main__':
