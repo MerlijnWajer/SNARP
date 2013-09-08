@@ -2,6 +2,7 @@
 #
 # snarp - Simple Noise Activated Recording in Python
 #
+# Copyright (C) 2013  Christopher Casebeer <christopher@chc.name>
 # Copyright (C) 2011  Merlijn Wajer <merlijn@wizzup.org>
 # Copyright (C) 2011  Antonio Ospite <ospite@studenti.unina.it>
 #
