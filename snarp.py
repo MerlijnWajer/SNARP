@@ -222,7 +222,7 @@ def get_samples(frames, wave_file):
 
     return samples
 
-def remove_silences(input_file, output_filename):
+def remove_silences(input_file, output_file):
     input_wave = wave.open(input_file)
 
     # Print audio setup
@@ -296,8 +296,7 @@ def remove_silences(input_file, output_filename):
         # TODO: encapsulate the following logic in the destuctor
         #       of BufferedClassFile
         buf.get_stream().flush()
-        with open(output_filename, 'wb') as output_file:
-            output_file.write(buf.get_stream().getvalue())
+        output_file.write(buf.get_stream().getvalue())
         o.close()
         logging.debug('Wrote {0} bytes.'.format(
             len(buf.get_stream().getvalue())
@@ -362,7 +361,8 @@ def main(*argv):
     with silence_limits(args.silence_min, args.silence_max):
         with input_endianness('big' if args.input_big_endian else 'little'):
             with input_signedness(args.input_override_signedness):
-                remove_silences(input_file, output_filename)
+                with open(output_filename, 'wb') as output_file:
+                    remove_silences(input_file, output_file)
 
     return 0
 
