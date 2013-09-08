@@ -32,6 +32,7 @@ except ImportError:
 import struct
 import sys
 import argparse
+import contextlib
 
 # Parameters of S24_3LE
 #FORMAT_SAMPLE_SIGNED=True
@@ -91,6 +92,15 @@ SILENCE_MAX = INPUT_SRC['silence_max']
 INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], \
     '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
 #INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
+
+@contextlib.contextmanager
+def silence_limits(min_, max_):
+    '''Override SILENCE_MIN and SILENCE_MAX globals.'''
+    global SILENCE_MIN, SILENCE_MAX
+    old_min, old_max = SILENCE_MIN, SILENCE_MAX
+    SILENCE_MIN, SILENCE_MAX = min_, max_
+    yield
+    SILENCE_MIN, SILENCE_MAX = old_min, old_max
 
 class NoiseFilter(object):
     def __init__(self):
@@ -262,6 +272,18 @@ def main(*argv):
         action='store_true',
         help='Read from arecord output. Overrides -i.'
     )
+    parser.add_argument(
+        '--silence-min',
+        type=int,
+        default=SILENCE_MIN,
+        help='Minimum wave sample value to consider silence.'
+    )
+    parser.add_argument(
+        '--silence-max',
+        type=int,
+        default=SILENCE_MAX,
+        help='Maximum wave sample value to consider silence.'
+    )
     args = parser.parse_args(argv[1:])
 
     input_filename = args.input_filename
@@ -276,7 +298,9 @@ def main(*argv):
     else:
         input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
 
-    remove_silences(input_file, output_filename)
+    with silence_limits(args.silence_min, args.silence_max):
+        remove_silences(input_file, output_filename)
+
     return 0
 
 if __name__ == '__main__':
