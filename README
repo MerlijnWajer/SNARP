@@ -1,5 +1,0 @@
-SNARP (Simple Noise Activated Recording in Python) is as the title suggests a
-program to record audio/ It is primarily development on the N900.
-
-Eventually I'll split it up into a recording part and a Graphical frontend. The
-frontend would probably be specific to the N900 Maemo 5 QT Widget set.
