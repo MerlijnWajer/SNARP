@@ -82,7 +82,6 @@ INPUTS = {
     }
 }
 
-
 INPUT_SRC = INPUTS["default"]
 #INPUT_SRC = INPUTS["podcaster"]
 
@@ -92,6 +91,31 @@ SILENCE_MAX = INPUT_SRC['silence_max']
 INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], \
     '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
 #INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
+
+# Global vars for Wave format metadata
+# Usually these are fixed by the format (little, 8 bit -> unsigned, > 8 bit signed), 
+# but change these values to override
+INPUT_ENDIANNESS = 'little' # Wave format default
+INPUT_SIGNEDNESS = None # None means permit Wave format rules to prevail
+
+# Context managers for global Wave format overrides
+@contextlib.contextmanager
+def input_endianness(val):
+    assert(val in ('little', 'big'))
+    global INPUT_ENDIANNESS
+    previous = INPUT_ENDIANNESS
+    INPUT_ENDIANNESS = val
+    yield
+    INPUT_ENDIANNESS = previous
+
+@contextlib.contextmanager
+def input_signedness(val):
+    assert(val in (None, 'signed', 'unsigned'))
+    global INPUT_SIGNEDNESS
+    previous = INPUT_SIGNEDNESS
+    INPUT_SIGNEDNESS = val
+    yield
+    INPUT_SIGNEDNESS = previous
 
 @contextlib.contextmanager
 def silence_limits(min_, max_):
@@ -115,16 +139,21 @@ class BufferedClassFile(object):
         return self.s
 
 
-def frame_to_sample(frame):
-    sample_storage_bytes = INPUT_SRC['format']['sample_width_storage_bytes']
+def frame_to_sample(frame, wave_file):
+    '''
+    Convert one frame to one sample
+
+    wave_file is needed for wave metadata - sample width, nchannels, etc.. 
+    '''
+    sample_storage_bytes = wave_file.getsampwidth()
 
     # handling only the first channel
     frame_data = frame[0:sample_storage_bytes]
 
     # Padding all samples to 4byte integer
-    if INPUT_SRC['format']['sample_width_storage_bytes'] < 4:
+    if sample_storage_bytes < 4:
 
-        if INPUT_SRC['format']['sample_endianness'] == 'little':
+        if INPUT_ENDIANNESS == 'little':
             frame_data_MSB = frame_data[sample_storage_bytes - 1]
         else:
             frame_data_MSB = frame_data[0]
@@ -139,18 +168,18 @@ def frame_to_sample(frame):
         # Set the middle padding
         padding = '\x00' * (4 - sample_storage_bytes - 1)
 
-        if INPUT_SRC['format']['sample_endianness'] == 'little':
+        if INPUT_ENDIANNESS == 'little':
             frame_data = frame_data + padding + padding_MSB
         else:
             frame_data = padding_MSB + padding + frame_data
 
     fmt = ''
-    if INPUT_SRC['format']['sample_endianness'] == 'little':
+    if INPUT_ENDIANNESS == 'little':
         fmt += '<'
     else:
         fmt += '>'
 
-    if INPUT_SRC['format']['sample_signed']:
+    if input_is_signed_data(wave_file):
         fmt += 'l'
     else:
         fmt += 'L'
@@ -158,16 +187,36 @@ def frame_to_sample(frame):
     sample = struct.unpack(fmt, frame_data)
     return sample[0]
 
+def input_is_signed_data(wave_file):
+    '''
+    Return True if the input contains signed date, False if unsigned
 
-def get_samples(frames):
+    Wave spec says:
+    - sample width == 8 bit ==> unsigned, 
+    - sample width > 8 bit ==> signed
+
+    Implement this but permit override if INPUT_SIGNEDNESS global
+    is explicitly set. 
+    '''
+    if INPUT_SIGNEDNESS is None:
+        # no explicit override, follow spec
+        return (wave_file.getsampwidth() > 1)
+    else:
+        return INPUT_SIGNEDNESS == 'signed'
+
+def get_samples(frames, wave_file):
+    '''
+    Convert frames to samples
+
+    wave_file is needed for wave metadata - sample width, nchannels, etc.. 
+    '''
     # chunk iteration taken from
     # http://stackoverflow.com/questions/434287
     samples = []
-    chunkSize = INPUT_SRC['format']['sample_width_storage_bytes'] * \
-            INPUT_SRC['channels']
+    chunkSize = wave_file.getsampwidth() * wave_file.getnchannels()
     for i in xrange(0, len(frames), chunkSize):
         frame = frames[i:i + chunkSize]
-        sample = frame_to_sample(frame)
+        sample = frame_to_sample(frame, wave_file)
         samples.append(sample)
 
     return samples
@@ -206,7 +255,7 @@ def remove_silences(input_file, output_filename):
             a = input_wave.readframes(
                 input_wave.getframerate() * input_wave.getnchannels()
             )
-            b = get_samples(a)
+            b = get_samples(a, input_wave)
 
             if len(b) == 0:
                 raise EOFError
@@ -284,6 +333,17 @@ def main(*argv):
         default=SILENCE_MAX,
         help='Maximum wave sample value to consider silence.'
     )
+    parser.add_argument(
+        '--input-big-endian',
+        action='store_true',
+        help='Ignore the Wave spec and interpret input as big endian. Not recommended.'
+    )
+    parser.add_argument(
+        '--input-override-signedness',
+        choices=("unsigned", "signed"),
+        default=None,
+        help='Ignore the Wave spec and interpres input with given signedness. Not recommended.'
+    )
     args = parser.parse_args(argv[1:])
 
     input_filename = args.input_filename
@@ -299,7 +359,9 @@ def main(*argv):
         input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
 
     with silence_limits(args.silence_min, args.silence_max):
-        remove_silences(input_file, output_filename)
+        with input_endianness('big' if args.input_big_endian else 'little'):
+            with input_signedness(args.input_override_signedness):
+                remove_silences(input_file, output_filename)
 
     return 0
 
