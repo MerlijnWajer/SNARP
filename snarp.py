@@ -35,63 +35,8 @@ import sys
 import argparse
 import contextlib
 
-# Parameters of S24_3LE
-#FORMAT_SAMPLE_SIGNED=True
-#FORMAT_SAMPLE_ENDIANNESS='little' # or 'big'
-# Sample width and sample storage width can be different:
-# FORMAT_SAMPLE_WIDTH is the resolution of the sample
-# FORMAT_SAMPLE_WIDTH_STORAGE is the storage format, how many bytes are used to
-# represent a sample of resolution FORMAT_SAMPLE_WIDTH
-#
-# A _frame_ width will be (FORMAT_SAMPLE_WIDTH_STORAGE * CHANNELS)
-#
-# Examples of formats with the same sample with but different storage width:
-#  S24_LE  -> FORMAT_SAMPLE_WIDTH = 24, FORMAT_SAMPLE_STORAGE_WIDTH_BYTES = 4
-#  S24_3LE -> FORMAT_SAMPLE_WIDTH = 24, FORMAT_SAMPLE_STORAGE_WIDTH_BYTES = 3
-#FORMAT_SAMPLE_WIDTH_BITS=24
-#FORMAT_SAMPLE_STORAGE_WIDTH_BYTES=3
-
-
-INPUTS = {
-    'default' : {
-        'device'        : 'hw:0,0',
-        'extra_options' : [],
-        'sample_rate'   : 8000,
-        'channels'      : 1,
-        'format'        : {
-            'sample_signed'              : False,
-            'sample_endianness'          : 'little',
-            'sample_width_bits'          : 8,
-            'sample_width_storage_bytes' : 1
-        },
-        'silence_min' : 120,
-        'silence_max' : 135
-    },
-    'podcaster' : {
-        'device' : 'front:CARD=Podcaster,DEV=0',
-        'extra_options' : ['-f', 'S24_3LE'],
-        'sample_rate'   : 48000,
-        'channels'      : 1,
-        'format'        : {
-            'sample_signed'              : True,
-            'sample_endianness'          : 'little',
-            'sample_width_bits'          : 24,
-            'sample_width_storage_bytes' : 3
-        },
-        'silence_min' : -1500000,
-        'silence_max' :  1500000
-    }
-}
-
-INPUT_SRC = INPUTS["default"]
-#INPUT_SRC = INPUTS["podcaster"]
-
-SILENCE_MIN = INPUT_SRC['silence_min']
-SILENCE_MAX = INPUT_SRC['silence_max']
-
-INPUT_CMD = ['arecord', '-D', INPUT_SRC['device'], \
-    '-r', str(INPUT_SRC['sample_rate'])] + INPUT_SRC['extra_options']
-#INPUT_CMD = ['gst-launch-0.10', 'pulsesrc ! wavenc ! fdsink fd=1']
+SILENCE_MIN = 120
+SILENCE_MAX = 135
 
 # Global vars for Wave format metadata
 # Usually these are fixed by the format (little, 8 bit -> unsigned, > 8 bit signed), 
@@ -131,14 +76,12 @@ class NoiseFilter(object):
     def __init__(self):
         pass
 
-
 class BufferedClassFile(object):
     def __init__(self):
         self.s = StringIO.StringIO()
 
     def get_stream(self):
         return self.s
-
 
 def frame_to_sample(frame, wave_file):
     '''
@@ -316,12 +259,6 @@ def main(*argv):
         help='Filename to write to.'
     )
     parser.add_argument(
-        '-a',
-        '--arecord', 
-        action='store_true',
-        help='Read from arecord output. Overrides -i.'
-    )
-    parser.add_argument(
         '--silence-min',
         type=int,
         default=SILENCE_MIN,
@@ -349,14 +286,7 @@ def main(*argv):
     input_filename = args.input_filename
     output_filename = args.output_filename
 
-    if args.arecord:
-        # Arecord just dumps the raw wav to stdout. We will use this
-        # to read from with out wave module.
-        p = subprocess.Popen(INPUT_CMD, stdout=subprocess.PIPE)
-        # Open the pipe.
-        input_file = p.stdout
-    else:
-        input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
+    input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
 
     with silence_limits(args.silence_min, args.silence_max):
         with input_endianness('big' if args.input_big_endian else 'little'):
