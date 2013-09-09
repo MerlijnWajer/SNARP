@@ -22,7 +22,6 @@
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-import subprocess
 import wave
 import time
 try:
