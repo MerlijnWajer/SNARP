@@ -94,44 +94,51 @@ def chunked_samples(input_wave, chunk_seconds):
     in chunks of at most `chunk_seconds` of data. The actual number of frames 
     per chunk will vary with the input wave's frame rate. 
     '''
+    sample_width = input_wave.getsampwidth()
+    nchannels = input_wave.getnchannels()
+    signed_data = input_is_signed_data(input_wave)
     frames_per_chunk = int(input_wave.getframerate() * chunk_seconds)
     while True:
         frames = input_wave.readframes(frames_per_chunk)
-        yield list(parse_frames(frames, input_wave)), frames
+        yield list(parse_frames(frames, sample_width, nchannels, signed_data)), frames
 
-def parse_frames(frames, input_wave):
+def parse_frames(frames, sample_width, nchannels, signed_data):
     '''
     Generator to convert wave frames to sample data
     
-    Requires `input_wave` reference to source wave file to get 
-    wave metadata, e.g. sample width.
+    Arguments:
+    frames        frame data 
+    sample_width  sample width in bytes
+    nchannels     number of channels per frame
+    signed_data   True if wave data is signed, false if unsigned
     '''
     # todo: coalesce samples for all channels into one?
-
-    # pass frame data for all channels at once to frame_to_sample
-    chunk_size = input_wave.getsampwidth() * input_wave.getnchannels()
+    chunk_size = sample_width * nchannels
     for i in xrange(0, len(frames), chunk_size):
         frame = frames[i:i + chunk_size]
-        yield frame_to_sample(frame, input_wave)
+        yield frame_to_sample(frame, sample_width, signed_data)
 
-def frame_to_sample(frame, wave_file):
+def frame_to_sample(frame, sample_width, signed_data):
     '''
     Convert one frame to one sample
 
     Note that we expect that the frame data will contain frames for all
     channels of the wave file. However, only the first channel will be 
     processed. The data from the remaining channels will be ignored!
-    '''
-    sample_storage_bytes = wave_file.getsampwidth()
 
+    Arguments:
+    frame         frame data for *all channels*, only first will be used
+    sample_width  sample width in bytes
+    signed_data   True if wave data is signed, false if unsigned
+    '''
     # handling only the first channel
-    frame_data = frame[0:sample_storage_bytes]
+    frame_data = frame[0:sample_width]
 
     # Padding all samples to 4byte integer
-    if sample_storage_bytes < 4:
+    if sample_width < 4:
 
         if INPUT_ENDIANNESS == 'little':
-            frame_data_MSB = frame_data[sample_storage_bytes - 1]
+            frame_data_MSB = frame_data[sample_width - 1]
         else:
             frame_data_MSB = frame_data[0]
 
@@ -143,7 +150,7 @@ def frame_to_sample(frame, wave_file):
             padding_MSB = '\x00'
 
         # Set the middle padding
-        padding = '\x00' * (4 - sample_storage_bytes - 1)
+        padding = '\x00' * (4 - sample_width - 1)
 
         if INPUT_ENDIANNESS == 'little':
             try:
@@ -160,7 +167,7 @@ def frame_to_sample(frame, wave_file):
     else:
         fmt += '>'
 
-    if input_is_signed_data(wave_file):
+    if signed_data:
         fmt += 'l'
     else:
         fmt += 'L'
