@@ -33,6 +33,7 @@ import struct
 import sys
 import argparse
 import contextlib
+import itertools
 
 SILENCE_MIN = 120
 SILENCE_MAX = 135
@@ -42,6 +43,9 @@ SILENCE_MAX = 135
 # but change these values to override
 INPUT_ENDIANNESS = 'little' # Wave format default
 INPUT_SIGNEDNESS = None # None means permit Wave format rules to prevail
+
+CHUNK_SECONDS = 1.0 # seconds per silence analysis period
+
 
 # Context managers for global Wave format overrides
 @contextlib.contextmanager
@@ -82,11 +86,41 @@ class BufferedClassFile(object):
     def get_stream(self):
         return self.s
 
+def chunked_samples(input_wave, chunk_seconds):
+    '''
+    Generator returning parsed and raw wave data one chunk at a time
+    
+    Yield a pair of (parsed wave samples, raw wave frames) from `input_wave` 
+    in chunks of at most `chunk_seconds` of data. The actual number of frames 
+    per chunk will vary with the input wave's frame rate. 
+    '''
+    frames_per_chunk = int(input_wave.getframerate() * chunk_seconds)
+    while True:
+        frames = input_wave.readframes(frames_per_chunk)
+        yield list(parse_frames(frames, input_wave)), frames
+
+def parse_frames(frames, input_wave):
+    '''
+    Generator to convert wave frames to sample data
+    
+    Requires `input_wave` reference to source wave file to get 
+    wave metadata, e.g. sample width.
+    '''
+    # todo: coalesce samples for all channels into one?
+
+    # pass frame data for all channels at once to frame_to_sample
+    chunk_size = input_wave.getsampwidth() * input_wave.getnchannels()
+    for i in xrange(0, len(frames), chunk_size):
+        frame = frames[i:i + chunk_size]
+        yield frame_to_sample(frame, input_wave)
+
 def frame_to_sample(frame, wave_file):
     '''
     Convert one frame to one sample
 
-    wave_file is needed for wave metadata - sample width, nchannels, etc.. 
+    Note that we expect that the frame data will contain frames for all
+    channels of the wave file. However, only the first channel will be 
+    processed. The data from the remaining channels will be ignored!
     '''
     sample_storage_bytes = wave_file.getsampwidth()
 
@@ -112,7 +146,11 @@ def frame_to_sample(frame, wave_file):
         padding = '\x00' * (4 - sample_storage_bytes - 1)
 
         if INPUT_ENDIANNESS == 'little':
-            frame_data = frame_data + padding + padding_MSB
+            try:
+                frame_data = frame_data + padding + padding_MSB
+            except Exception,e:
+                import pdb
+                pdb.set_trace()
         else:
             frame_data = padding_MSB + padding + frame_data
 
@@ -147,23 +185,6 @@ def input_is_signed_data(wave_file):
     else:
         return INPUT_SIGNEDNESS == 'signed'
 
-def get_samples(frames, wave_file):
-    '''
-    Convert frames to samples
-
-    wave_file is needed for wave metadata - sample width, nchannels, etc.. 
-    '''
-    # chunk iteration taken from
-    # http://stackoverflow.com/questions/434287
-    samples = []
-    chunkSize = wave_file.getsampwidth() * wave_file.getnchannels()
-    for i in xrange(0, len(frames), chunkSize):
-        frame = frames[i:i + chunkSize]
-        sample = frame_to_sample(frame, wave_file)
-        samples.append(sample)
-
-    return samples
-
 def remove_silences(input_file, output_file):
     input_wave = wave.open(input_file)
 
@@ -193,22 +214,16 @@ def remove_silences(input_file, output_file):
     oldbuf = ''
 
     try:
-        while True:
-            # Read 1 second of audio
-            a = input_wave.readframes(
-                input_wave.getframerate() * input_wave.getnchannels()
-            )
-            b = get_samples(a, input_wave)
-
-            if len(b) == 0:
+        for chunk_samples, chunk_frames in chunked_samples(input_wave, CHUNK_SECONDS):
+            if len(chunk_samples) == 0:
                 raise EOFError
 
-            _min, _max = min(b), max(b)
+            min_, max_ = min(chunk_samples), max(chunk_samples)
 
             # Print bounds
-            logging.debug('min {0}, max {1}'.format(_min, _max))
+            logging.debug('min {0}, max {1}'.format(min_, max_))
 
-            if _max > SILENCE_MAX and _min < SILENCE_MIN:
+            if max_ > SILENCE_MAX and min_ < SILENCE_MIN:
                 high = True
             else:
                 high = False
@@ -225,15 +240,17 @@ def remove_silences(input_file, output_file):
                 else:
                     logging.debug('...Post-rolling')
 
-                o.writeframes(a)
+                o.writeframes(chunk_frames)
 
             # prepare for post-roll
             lasthigh = high
             
             # prepare for pre-roll
-            oldbuf = a
+            oldbuf = chunk_frames
 
     except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
         input_wave.close()
         # TODO: encapsulate the following logic in the destuctor
         #       of BufferedClassFile
