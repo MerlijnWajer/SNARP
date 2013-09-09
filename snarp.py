@@ -75,6 +75,24 @@ class NoiseFilter(object):
     def __init__(self):
         pass
 
+def tag_chunks(chunk_gen):
+    '''
+    Tag each chunk in the generator as silent (True) or audible (False)
+
+    Returns tuple of (chunk_silent, chunk_samples, chunk_frames)
+    '''
+    for chunk_samples, chunk_frames in chunk_gen:
+        if len(chunk_samples) == 0:
+            raise EOFError
+
+        min_, max_ = min(chunk_samples), max(chunk_samples)
+        audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
+        silence = not audible
+
+        logging.debug('min: {0} max: {1} silence: {2}'.format(min_, max_, silence))
+
+        yield silence, chunk_samples, chunk_frames
+
 def chunked_samples(input_wave, chunk_seconds):
     '''
     Generator returning parsed and raw wave data one chunk at a time
@@ -207,16 +225,10 @@ def remove_silences(input_file, output_file):
     oldbuf = ''
 
     try:
-        for chunk_samples, chunk_frames in chunked_samples(input_wave, CHUNK_SECONDS):
-            if len(chunk_samples) == 0:
-                raise EOFError
+        for silence, chunk_samples, chunk_frames in \
+            tag_chunks(chunked_samples(input_wave, CHUNK_SECONDS)):
 
-            min_, max_ = min(chunk_samples), max(chunk_samples)
-
-            # Print bounds
-            logging.debug('min {0}, max {1}'.format(min_, max_))
-
-            if max_ > SILENCE_MAX and min_ < SILENCE_MIN:
+            if silence:
                 high = True
             else:
                 high = False
