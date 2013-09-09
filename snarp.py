@@ -24,10 +24,6 @@ logging.basicConfig(level=logging.DEBUG)
 
 import wave
 import time
-try:
-    import cStringIO as StringIO
-except ImportError:
-    import StringIO
 
 import struct
 import sys
@@ -78,13 +74,6 @@ def silence_limits(min_, max_):
 class NoiseFilter(object):
     def __init__(self):
         pass
-
-class BufferedClassFile(object):
-    def __init__(self):
-        self.s = StringIO.StringIO()
-
-    def get_stream(self):
-        return self.s
 
 def chunked_samples(input_wave, chunk_seconds):
     '''
@@ -195,15 +184,8 @@ def input_is_signed_data(wave_file):
 def remove_silences(input_file, output_file):
     input_wave = wave.open(input_file)
 
-    # Print audio setup
-    logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
-    logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
-
-    buf = BufferedClassFile()
-
-    # Open file we will write to.
-    o = wave.open(buf.get_stream(), 'w')
-    o.setparams((
+    output_wave = wave.open(output_file, 'wb')
+    output_wave.setparams((
         input_wave.getnchannels(),
         input_wave.getsampwidth(),
         input_wave.getframerate(),
@@ -211,6 +193,10 @@ def remove_silences(input_file, output_file):
         'NONE',
         'not compressed'
     ))
+
+    # Print audio setup
+    logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
+    logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
     high = False
 
@@ -240,14 +226,14 @@ def remove_silences(input_file, output_file):
 
                 if not lasthigh:
                     logging.debug('Pre-rolling...')
-                    o.writeframes(oldbuf)
+                    output_wave.writeframes(oldbuf)
 
                 if high:
                     logging.debug('...Recording...')
                 else:
                     logging.debug('...Post-rolling')
 
-                o.writeframes(chunk_frames)
+                output_wave.writeframes(chunk_frames)
 
             # prepare for post-roll
             lasthigh = high
@@ -259,14 +245,7 @@ def remove_silences(input_file, output_file):
         pass
     finally:
         input_wave.close()
-        # TODO: encapsulate the following logic in the destuctor
-        #       of BufferedClassFile
-        buf.get_stream().flush()
-        output_file.write(buf.get_stream().getvalue())
-        o.close()
-        logging.debug('Wrote {0} bytes.'.format(
-            len(buf.get_stream().getvalue())
-        ))
+        output_wave.close()
 
 def main(*argv):
     parser = argparse.ArgumentParser(description='Remove silence from wave audio data.')
