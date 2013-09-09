@@ -75,6 +75,41 @@ class NoiseFilter(object):
     def __init__(self):
         pass
 
+def audible_chunks(tagged_chunks):
+    '''
+    Generator returning audio chunk frames only for non-silent segments
+    '''
+    high = False
+    # lasthigh is used for post-rolling (save one second _after_ the one with noise)
+    lasthigh = False
+
+    # oldbuf is for pre-rolling (save one second _before_ the one with noise)
+    oldbuf = ''
+
+    for silence, chunk_samples, chunk_frames in tagged_chunks:
+        if silence:
+            high = True
+        else:
+            high = False
+
+        # Write always if either is True.
+        if lasthigh or high:
+            if not lasthigh:
+                logging.debug('Pre-rolling...')
+                yield oldbuf
+
+            if high:
+                logging.debug('...Recording...')
+            else:
+                logging.debug('...Post-rolling')
+
+            yield chunk_frames
+
+        # prepare for post-roll
+        lasthigh = high
+        # prepare for pre-roll
+        oldbuf = chunk_frames
+
 def tag_chunks(chunk_gen):
     '''
     Tag each chunk in the generator as silent (True) or audible (False)
@@ -216,42 +251,12 @@ def remove_silences(input_file, output_file):
     logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
-    high = False
-
-    # lasthigh is used for post-rolling (save one second _after_ the one with noise)
-    lasthigh = False
-
-    # oldbuf is for pre-rolling (save one second _before_ the one with noise)
-    oldbuf = ''
 
     try:
-        for silence, chunk_samples, chunk_frames in \
-            tag_chunks(chunked_samples(input_wave, CHUNK_SECONDS)):
+        for chunk_frames in \
+            audible_chunks(tag_chunks(chunked_samples(input_wave, CHUNK_SECONDS))):
 
-            if silence:
-                high = True
-            else:
-                high = False
-
-            # Write always if either is True.
-            if lasthigh or high:
-
-                if not lasthigh:
-                    logging.debug('Pre-rolling...')
-                    output_wave.writeframes(oldbuf)
-
-                if high:
-                    logging.debug('...Recording...')
-                else:
-                    logging.debug('...Post-rolling')
-
-                output_wave.writeframes(chunk_frames)
-
-            # prepare for post-roll
-            lasthigh = high
-            
-            # prepare for pre-roll
-            oldbuf = chunk_frames
+            output_wave.writeframes(chunk_frames)
 
     except (KeyboardInterrupt, EOFError):
         pass
