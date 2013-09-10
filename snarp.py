@@ -76,11 +76,33 @@ class NoiseFilter(object):
     def __init__(self):
         pass
 
-def audible_chunks(tagged_chunks):
+class RingBuffer(collections.deque):
+    def append(self, value):
+        discard = None
+        if len(self) == self.maxlen:
+            discard = self.popleft()
+        collections.deque.append(self, value)
+        return discard
+
+def audible_chunks(tagged_segments):
     '''
-    Generator returning audio chunk frames only for non-silent segments
+    Generator returning chunk frames tagged by segment
     '''
-    pre_roll_buffer = collections.deque(maxlen=1)
+    for silent_segment, chunk_frames in tagged_segments:
+        if not silent_segment:
+            yield chunk_frames
+
+def tag_segments(tagged_chunks):
+    '''
+    Generator returning chunk frames tagged by segment
+
+    Returns a tuple of (chunk_in_silent_segment, chunk_frames) for each
+    chunk in the provided generator. 
+
+    Note that this does not tag based strictly on whether the current chunk is silent
+    or audible; rather it tags *which type of segment* the chunk belongs to. 
+    '''
+    pre_roll_buffer = RingBuffer(maxlen=1)
     segment_silent = True
     for chunk_silent, chunk_samples, chunk_frames in tagged_chunks:
         # four cases: changing state/not changing state X silent chunk/audible chunk
@@ -89,18 +111,20 @@ def audible_chunks(tagged_chunks):
                 # starting audible segment, write out pre-roll buffer
                 logging.debug("Pre-rolling...")
                 for frames in pre_roll_buffer:
-                    yield frames
+                    yield False, frames
                 pre_roll_buffer.clear()
             else:
                 # ending audible segment, write out any currently consumed chunks
                 logging.debug("Post-rolling...")
-            yield chunk_frames
+            yield False, chunk_frames
             segment_silent = chunk_silent
         else: # not changing state
             if chunk_silent:
-                pre_roll_buffer.append(chunk_frames)
+                frames = pre_roll_buffer.append(chunk_frames)
+                if frames is not None:
+                    yield True, frames
             else:
-                yield chunk_frames
+                yield False, chunk_frames
 
 def tag_chunks(chunk_gen):
     '''
@@ -246,7 +270,13 @@ def remove_silences(input_file, output_file):
 
     try:
         for chunk_frames in \
-            audible_chunks(tag_chunks(chunked_samples(input_wave, CHUNK_SECONDS))):
+            audible_chunks(
+                tag_segments(
+                    tag_chunks(
+                        chunked_samples(input_wave, CHUNK_SECONDS)
+                    )
+                )
+            ):
 
             output_wave.writeframes(chunk_frames)
 
