@@ -269,7 +269,7 @@ def input_is_signed_data(wave_file):
     else:
         return INPUT_SIGNEDNESS == 'signed'
 
-def remove_silences(input_file, output_file):
+def remove_silences(input_file, output_file, bypass_file=None):
     input_wave = wave.open(input_file)
 
     output_wave = wave.open(output_file, 'wb')
@@ -282,14 +282,26 @@ def remove_silences(input_file, output_file):
         'not compressed'
     ))
 
+    bypass_wave = None
+    if bypass_file is not None:
+        bypass_wave = wave.open(bypass_file, 'wb')
+        bypass_wave.setparams((
+            input_wave.getnchannels(),
+            input_wave.getsampwidth(),
+            input_wave.getframerate(),
+            0,
+            'NONE',
+            'not compressed'
+        ))
+
     # Print audio setup
     logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
 
     try:
-        for chunk_frames in \
-            audible_chunks(
+        for silent_segment, segment in \
+            segmenter(
                 tag_segments(
                     tag_chunks(
                         chunked_samples(input_wave, CHUNK_SECONDS)
@@ -297,13 +309,23 @@ def remove_silences(input_file, output_file):
                 )
             ):
 
-            output_wave.writeframes(chunk_frames)
+            if silent_segment:
+                if bypass_wave is not None:
+                    for chunk_frames in segment:
+                        bypass_wave.writeframes(chunk_frames)
+            else:
+                for chunk_frames in segment:
+                    output_wave.writeframes(chunk_frames)
+                    if bypass_wave is not None:
+                        bypass_wave.writeframes(chunk_frames)
 
     except (KeyboardInterrupt, EOFError):
         pass
     finally:
         input_wave.close()
         output_wave.close()
+        if bypass_wave is not None:
+            bypass_wave.close()
 
 def main(*argv):
     parser = argparse.ArgumentParser(description='Remove silence from wave audio data.')
@@ -314,8 +336,13 @@ def main(*argv):
         help='Filename to read. Defaults to - for STDIN.'
     )
     parser.add_argument(
+        '-b',
+        '--bypass_filename',
+        default=None,
+        help='Filename to write bypass audio to. All audio data read from the input will be passed through.'
+    )
+    parser.add_argument(
         'output_filename', 
-        default='-',
         help='Filename to write to.'
     )
     parser.add_argument(
@@ -348,11 +375,15 @@ def main(*argv):
 
     input_file = sys.stdin if input_filename == '-' else open(input_filename, 'rb')
 
+    bypass_file = None
+    if args.bypass_filename is not None:
+        bypass_file = open(args.bypass_filename, 'wb')
+
     with silence_limits(args.silence_min, args.silence_max):
         with input_endianness('big' if args.input_big_endian else 'little'):
             with input_signedness(args.input_override_signedness):
                 with open(output_filename, 'wb') as output_file:
-                    remove_silences(input_file, output_file)
+                    remove_silences(input_file, output_file, bypass_file)
 
     return 0
 
