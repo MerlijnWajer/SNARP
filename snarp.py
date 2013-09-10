@@ -223,21 +223,29 @@ def tag_segments(tagged_chunks):
         print "dumping left-over frames at end of file."
         yield segment_silent, frames
 
-def tag_chunks(chunk_gen):
+def tag_chunks(chunk_gen, silence_deltas):
     '''
     Tag each chunk in the generator as silent (True) or audible (False)
 
     Returns tuple of (chunk_silent, chunk_samples, chunk_frames)
     '''
+    max_delta, iqr_delta = silence_deltas
     for chunk_samples, chunk_frames in chunk_gen:
         if len(chunk_samples) == 0:
             break
 
-        min_, max_ = min(chunk_samples), max(chunk_samples)
-        audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
+        samples = sorted(chunk_samples)
+        count = len(samples)
+        first, last = samples[:int(count/2)], samples[int(count/2):]
+        q1, q3 = first[int(len(first)/2):][0], last[int(len(last)/2):][0]
+
+        min_, max_ = samples[0], samples[count - 1]
+        #audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
+        audible = max_ - min_ > max_delta
+        audible = audible or q3 - q1 > iqr_delta
         silence = not audible
 
-        logging.debug('min: {0} max: {1} silence: {2}'.format(min_, max_, silence))
+        logging.debug('max_delta: {0}, iqr_delta: {1}, silence: {2}'.format(max_ - min_, q3 - q1, silence))
 
         yield silence, chunk_samples, chunk_frames
 
@@ -286,35 +294,9 @@ def frame_to_sample(frame, sample_width, signed_data):
     sample_width  sample width in bytes
     signed_data   True if wave data is signed, false if unsigned
     '''
+    # todo: accept nchannels and decode all channels
     # handling only the first channel
     frame_data = frame[0:sample_width]
-
-    # Padding all samples to 4byte integer
-    if sample_width < 4:
-
-        if INPUT_ENDIANNESS == 'little':
-            frame_data_MSB = frame_data[sample_width - 1]
-        else:
-            frame_data_MSB = frame_data[0]
-
-        # Check if positive or negative and set the MSB accordigly
-        if ord(frame_data_MSB) & 0x80:
-            padding_MSB = '\xff'
-            frame_data_MSB = chr(ord(frame_data_MSB) & ~0x80)
-        else:
-            padding_MSB = '\x00'
-
-        # Set the middle padding
-        padding = '\x00' * (4 - sample_width - 1)
-
-        if INPUT_ENDIANNESS == 'little':
-            try:
-                frame_data = frame_data + padding + padding_MSB
-            except Exception,e:
-                import pdb
-                pdb.set_trace()
-        else:
-            frame_data = padding_MSB + padding + frame_data
 
     fmt = ''
     if INPUT_ENDIANNESS == 'little':
@@ -323,9 +305,9 @@ def frame_to_sample(frame, sample_width, signed_data):
         fmt += '>'
 
     if signed_data:
-        fmt += 'l'
+        fmt += {4:'l', 2:'h', 1:'b'}[sample_width]
     else:
-        fmt += 'L'
+        fmt += {4:'L', 2:'H', 1:'B'}[sample_width]
 
     sample = struct.unpack(fmt, frame_data)
     return sample[0]
@@ -382,7 +364,8 @@ def remove_silences(input_file, output_file, bypass_file=None):
             segmenter(
                 tag_segments(
                     tag_chunks(
-                        chunked_samples(input_wave, CHUNK_MS / 1000.0)
+                        chunked_samples(input_wave, CHUNK_MS / 1000.0),
+                        (2**12, 2**8)
                     )
                 )
             ):
