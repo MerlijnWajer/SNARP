@@ -48,10 +48,10 @@ INPUT_SIGNEDNESS = None # None means permit Wave format rules to prevail
 # parameters. Note that all times must be multiples of CHUNK_MS, since
 # all audio processing is done in blocks of length CHUNK_MS. 
 # 
-CHUNK_MS      = 10  # milliseconds per silence analysis period
-HYSTERESIS_MS = 1000 # ms of silence before we decide audible segment is over
-PRE_ROLL_MS   = 500  # ms of silence to play at beginning of audible segment
-POST_ROLL_MS  = 500  # ms of silence to play at end of audible segment
+CHUNK_MS      = 1000   # milliseconds per silence analysis period
+HYSTERESIS_MS = 3000 # ms of silence before we decide audible segment is over
+PRE_ROLL_MS   = 1000  # ms of silence to play at beginning of audible segment
+POST_ROLL_MS  = 1000  # ms of silence to play at end of audible segment
 
 HYSTERESIS_CHUNKS = int(float(HYSTERESIS_MS) / CHUNK_MS)
 PRE_ROLL_CHUNKS   = int(float(PRE_ROLL_MS) / CHUNK_MS)
