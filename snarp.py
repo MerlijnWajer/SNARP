@@ -169,13 +169,13 @@ def tag_segments(tagged_chunks):
 
                 # first, take any extra buffer and append to silent segment
                 for i in range(len(buffer) - PRE_ROLL_CHUNKS):
-                    logging.debug("Dumped excess buffer chunk to silent segment.")
+                    #logging.debug("Dumped excess buffer chunk to silent segment.")
                     yield False, buffer.popleft()
                     
                 # write out remainder of buffer as pre-roll
                 logging.debug("Pre-rolling...")
                 for frames in buffer:
-                    logging.debug("Pre-roll chunk written.")
+                    #logging.debug("Pre-roll chunk written.")
                     yield False, frames
                 buffer.clear()
 
@@ -188,7 +188,7 @@ def tag_segments(tagged_chunks):
                 # first few buffered chunks go to end of audible segment
                 for i in range(POST_ROLL_CHUNKS):
                     if len(buffer) > 0:
-                        logging.debug("Post-roll chunk written.")
+                        #logging.debug("Post-roll chunk written.")
                         yield False, buffer.popleft()
 
                 # any remaining buffer chunks should go to the silent segment
@@ -247,12 +247,12 @@ def tag_chunks(chunk_gen, silence_deltas):
         md, iqrd = max_ - min_, q3 - q1
 
         #logging.debug('max_delta: {0}, iqr_delta: {1}, silence: {2}'.format(max_ - min_, q3 - q1, silence))
-        logging.debug('{}% {}%, ({}, {}), silence: {}'.format(
-            int(100 * float(max_ - min_) / max_delta), 
-            int(100 * float(q3 - q1) / iqr_delta), 
-            md, iqrd,
-            silence
-        ))
+#        logging.debug('{}% {}%, ({}, {}), silence: {}'.format(
+#            int(100 * float(max_ - min_) / max_delta), 
+#            int(100 * float(q3 - q1) / iqr_delta), 
+#            md, iqrd,
+#            silence
+#        ))
 
         yield silence, chunk_samples, chunk_frames
 
