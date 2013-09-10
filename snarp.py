@@ -86,11 +86,30 @@ class RingBuffer(collections.deque):
 
 def audible_chunks(tagged_segments):
     '''
-    Generator returning chunk frames tagged by segment
+    Generator producing audio chunks only for audible segments
     '''
-    for silent_segment, chunk_frames in tagged_segments:
-        if not silent_segment:
-            yield chunk_frames
+    return itertools.imap(lambda pair: pair[1], 
+        itertools.ifilter(lambda pair: not pair[0], tagged_segments)
+    )
+
+def audible_segments(tagged_segments):
+    '''
+    Return generator of generators, one per audible segment
+
+    For each audible segment in the chunk stream, return a generator
+    for its audio data chunks.
+    '''
+    return (segment for silent, segment in segmenter(tagged_segments) if not silent)
+
+def segmenter(tagged_segments):
+    '''
+    Return generator of generators, one per segment
+
+    For each segment in the chunk stream, return a tuple of:
+        (segment_is_silent, chunk_generator_for_segment)
+    '''
+    for silent, segment in itertools.groupby(tagged_segments, key=lambda pair: pair[0]):
+        yield silent, itertools.imap(lambda pair: pair[1], segment)
 
 def tag_segments(tagged_chunks):
     '''
