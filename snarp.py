@@ -154,7 +154,6 @@ def tag_segments(tagged_chunks):
                     yield False, frames
                 buffer.clear()
             hysteresis_counter = 0
-
         # four cases: changing state/not changing state X silent chunk/audible chunk
         if (segment_silent and not chunk_silent) or\
             hysteresis_counter >= HYSTERESIS_CHUNKS:
@@ -245,7 +244,15 @@ def tag_chunks(chunk_gen, silence_deltas):
         audible = audible or q3 - q1 > iqr_delta
         silence = not audible
 
-        logging.debug('max_delta: {0}, iqr_delta: {1}, silence: {2}'.format(max_ - min_, q3 - q1, silence))
+        md, iqrd = max_ - min_, q3 - q1
+
+        #logging.debug('max_delta: {0}, iqr_delta: {1}, silence: {2}'.format(max_ - min_, q3 - q1, silence))
+        logging.debug('{}% {}%, ({}, {}), silence: {}'.format(
+            int(100 * float(max_ - min_) / max_delta), 
+            int(100 * float(q3 - q1) / iqr_delta), 
+            md, iqrd,
+            silence
+        ))
 
         yield silence, chunk_samples, chunk_frames
 
@@ -358,6 +365,15 @@ def remove_silences(input_file, output_file, bypass_file=None):
     logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
+    delta_limits = (2**7, 2**4) # whisper level
+    delta_limits = (2**11, 2**8) # conversational level
+    delta_limits = (2**9, 2**6) # quiet level
+
+    conversion = 2.0**(input_wave.getsampwidth() * 8) / 2**16
+    converted_delta_limits = conversion * delta_limits[0], conversion * delta_limits[1]
+
+    logging.debug("16 bit delta limits: {0}".format(delta_limits))
+    logging.debug("{0} bit delta limits: {1}".format(input_wave.getsampwidth() * 8, converted_delta_limits))
 
     try:
         for silent_segment, segment in \
@@ -365,7 +381,7 @@ def remove_silences(input_file, output_file, bypass_file=None):
                 tag_segments(
                     tag_chunks(
                         chunked_samples(input_wave, CHUNK_MS / 1000.0),
-                        (2**12, 2**8)
+                        converted_delta_limits
                     )
                 )
             ):
