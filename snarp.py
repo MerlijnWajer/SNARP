@@ -30,6 +30,7 @@ import sys
 import argparse
 import contextlib
 import itertools
+import collections
 
 SILENCE_MIN = 120
 SILENCE_MAX = 135
@@ -79,36 +80,27 @@ def audible_chunks(tagged_chunks):
     '''
     Generator returning audio chunk frames only for non-silent segments
     '''
-    high = False
-    # lasthigh is used for post-rolling (save one second _after_ the one with noise)
-    lasthigh = False
-
-    # oldbuf is for pre-rolling (save one second _before_ the one with noise)
-    oldbuf = ''
-
-    for silence, chunk_samples, chunk_frames in tagged_chunks:
-        if silence:
-            high = True
-        else:
-            high = False
-
-        # Write always if either is True.
-        if lasthigh or high:
-            if not lasthigh:
-                logging.debug('Pre-rolling...')
-                yield oldbuf
-
-            if high:
-                logging.debug('...Recording...')
+    pre_roll_buffer = collections.deque(maxlen=1)
+    segment_silent = True
+    for chunk_silent, chunk_samples, chunk_frames in tagged_chunks:
+        # four cases: changing state/not changing state X silent chunk/audible chunk
+        if chunk_silent != segment_silent:
+            if not chunk_silent:
+                # starting audible segment, write out pre-roll buffer
+                logging.debug("Pre-rolling...")
+                for frames in pre_roll_buffer:
+                    yield frames
+                pre_roll_buffer.clear()
             else:
-                logging.debug('...Post-rolling')
-
+                # ending audible segment, write out any currently consumed chunks
+                logging.debug("Post-rolling...")
             yield chunk_frames
-
-        # prepare for post-roll
-        lasthigh = high
-        # prepare for pre-roll
-        oldbuf = chunk_frames
+            segment_silent = chunk_silent
+        else: # not changing state
+            if chunk_silent:
+                pre_roll_buffer.append(chunk_frames)
+            else:
+                yield chunk_frames
 
 def tag_chunks(chunk_gen):
     '''
