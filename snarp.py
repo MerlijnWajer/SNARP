@@ -20,7 +20,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 import wave
 import time
@@ -41,8 +42,20 @@ SILENCE_MAX = 135
 INPUT_ENDIANNESS = 'little' # Wave format default
 INPUT_SIGNEDNESS = None # None means permit Wave format rules to prevail
 
-CHUNK_SECONDS = 1.0 # seconds per silence analysis period
+## Noise detection timings
+#
+# Set the times, in milliseconds, to use for various noise detection 
+# parameters. Note that all times must be multiples of CHUNK_MS, since
+# all audio processing is done in blocks of length CHUNK_MS. 
+# 
+CHUNK_MS      = 10  # milliseconds per silence analysis period
+HYSTERESIS_MS = 1000 # ms of silence before we decide audible segment is over
+PRE_ROLL_MS   = 500  # ms of silence to play at beginning of audible segment
+POST_ROLL_MS  = 500  # ms of silence to play at end of audible segment
 
+HYSTERESIS_CHUNKS = int(float(HYSTERESIS_MS) / CHUNK_MS)
+PRE_ROLL_CHUNKS   = int(float(PRE_ROLL_MS) / CHUNK_MS)
+POST_ROLL_CHUNKS  = int(float(POST_ROLL_MS) / CHUNK_MS)
 
 # Context managers for global Wave format overrides
 @contextlib.contextmanager
@@ -121,29 +134,94 @@ def tag_segments(tagged_chunks):
     Note that this does not tag based strictly on whether the current chunk is silent
     or audible; rather it tags *which type of segment* the chunk belongs to. 
     '''
-    pre_roll_buffer = RingBuffer(maxlen=1)
+    logging.info("Config: CHUNK_MS: {}, HYSTERESIS_CHUNKS: {}, PRE_ROLL_CHUNKS: {}, POST_ROLL_CHUNKS: {}".format(
+        CHUNK_MS, HYSTERESIS_CHUNKS, PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS
+    ))
+    buffer = RingBuffer(maxlen=max(PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS))
     segment_silent = True
+    hysteresis_counter = 0
     for chunk_silent, chunk_samples, chunk_frames in tagged_chunks:
-        # four cases: changing state/not changing state X silent chunk/audible chunk
         if chunk_silent != segment_silent:
-            if not chunk_silent:
-                # starting audible segment, write out pre-roll buffer
-                logging.debug("Pre-rolling...")
-                for frames in pre_roll_buffer:
+#            print "Bump hysteresis, saw {} in {} segment".format("silence" if chunk_silent else "audible",
+#                "silent" if segment_silent else "audible")
+            hysteresis_counter += 1
+        else:
+#            if hysteresis_counter > 10:
+#                print "Hysteresis counter reset"
+            if not segment_silent:
+                # dump buffered silent frames so we don't lose silence in middle of audible
+                for frames in buffer:
                     yield False, frames
-                pre_roll_buffer.clear()
+                buffer.clear()
+            hysteresis_counter = 0
+
+        # four cases: changing state/not changing state X silent chunk/audible chunk
+        if (segment_silent and not chunk_silent) or\
+            hysteresis_counter >= HYSTERESIS_CHUNKS:
+
+            print hysteresis_counter
+
+            # changing state if we see any audible chunks 
+            # or more than HYSTERESIS_CHUNKS silent chunks
+            segment_silent = chunk_silent
+
+            if not chunk_silent:
+                # starting audible segment
+
+                # first, take any extra buffer and append to silent segment
+                for i in range(len(buffer) - PRE_ROLL_CHUNKS):
+                    logging.debug("Dumped excess buffer chunk to silent segment.")
+                    yield False, buffer.popleft()
+                    
+                # write out remainder of buffer as pre-roll
+                logging.debug("Pre-rolling...")
+                for frames in buffer:
+                    logging.debug("Pre-roll chunk written.")
+                    yield False, frames
+                buffer.clear()
+
+                # emit first audible chunk
+                yield False, chunk_frames
             else:
                 # ending audible segment, write out any currently consumed chunks
                 logging.debug("Post-rolling...")
-            yield False, chunk_frames
-            segment_silent = chunk_silent
+
+                # first few buffered chunks go to end of audible segment
+                for i in range(POST_ROLL_CHUNKS):
+                    if len(buffer) > 0:
+                        logging.debug("Post-roll chunk written.")
+                        yield False, buffer.popleft()
+
+                # any remaining buffer chunks should go to the silent segment
+                for frames in buffer:
+                    logging.debug("Dumped excess buffer chunk to silent segment.")
+                    yield True, frames
+
+                buffer.clear()
+
+                # the current (silent) chunk goes to the silent segment
+                yield True, chunk_frames
         else: # not changing state
             if chunk_silent:
-                frames = pre_roll_buffer.append(chunk_frames)
+                # we only ever buffer silent chunks, since we don't know whether we
+                # want to hear them (within, or at the beginning or end of an audible
+                # segment. 
+                frames = buffer.append(chunk_frames)
+
+                # If the ring buffer is full, it will spit out the displaced, oldest
+                # chunk. Go ahead and emit this as part of a silent segment, since we
+                # now know we don't care about it.
                 if frames is not None:
                     yield True, frames
             else:
+                # we always want to hear audible chunks
                 yield False, chunk_frames
+    # todo: handle contents of buffer after input chunks exhausted
+    # ideally would run back through state change loop one more time
+    # for now, just dump out attached to current segment
+    for frames in buffer:
+        print "dumping left-over frames at end of file."
+        yield segment_silent, frames
 
 def tag_chunks(chunk_gen):
     '''
@@ -153,7 +231,7 @@ def tag_chunks(chunk_gen):
     '''
     for chunk_samples, chunk_frames in chunk_gen:
         if len(chunk_samples) == 0:
-            raise EOFError
+            break
 
         min_, max_ = min(chunk_samples), max(chunk_samples)
         audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
@@ -304,11 +382,11 @@ def remove_silences(input_file, output_file, bypass_file=None):
             segmenter(
                 tag_segments(
                     tag_chunks(
-                        chunked_samples(input_wave, CHUNK_SECONDS)
+                        chunked_samples(input_wave, CHUNK_MS / 1000.0)
                     )
                 )
             ):
-
+            logging.info("Starting {0} segment.".format("silent" if silent_segment else "audible"))
             if silent_segment:
                 if bypass_wave is not None:
                     for chunk_frames in segment:
@@ -319,7 +397,7 @@ def remove_silences(input_file, output_file, bypass_file=None):
                     if bypass_wave is not None:
                         bypass_wave.writeframes(chunk_frames)
 
-    except (KeyboardInterrupt, EOFError):
+    except KeyboardInterrupt:
         pass
     finally:
         input_wave.close()
