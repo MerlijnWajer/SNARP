@@ -33,8 +33,14 @@ import contextlib
 import itertools
 import collections
 
-SILENCE_MIN = 120
-SILENCE_MAX = 135
+SILENCE_PRESET_LIMITS = {
+    'conversational': (-15, -24),
+    'quiet': (-21, -30),
+    'whisper': (-27, -36),
+}
+
+# todo: remove global setting and pass in to remove_silences() explicitly?
+SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = SILENCE_PRESET_LIMITS['quiet']
 
 # Global vars for Wave format metadata
 # Usually these are fixed by the format (little, 8 bit -> unsigned, > 8 bit signed), 
@@ -77,13 +83,13 @@ def input_signedness(val):
     INPUT_SIGNEDNESS = previous
 
 @contextlib.contextmanager
-def silence_limits(min_, max_):
-    '''Override SILENCE_MIN and SILENCE_MAX globals.'''
-    global SILENCE_MIN, SILENCE_MAX
-    old_min, old_max = SILENCE_MIN, SILENCE_MAX
-    SILENCE_MIN, SILENCE_MAX = min_, max_
+def silence_limits(peak, iqr):
+    '''Override SILENCE_PEAK_LIMIT and SILENCE_IQR_LIMIT globals.'''
+    global SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT
+    old_min, old_max = SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT 
+    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = peak, iqr
     yield
-    SILENCE_MIN, SILENCE_MAX = old_min, old_max
+    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = old_min, old_max
 
 class NoiseFilter(object):
     def __init__(self):
@@ -96,6 +102,12 @@ class RingBuffer(collections.deque):
             discard = self.popleft()
         collections.deque.append(self, value)
         return discard
+
+def dbfs_to_sample_value(dbfs, sample_width):
+    # convert dbFS to sample values based on our sample width in bytes
+    sample_value = 10.0 ** (dbfs / 10.0) * 2.0 ** (sample_width * 8)
+    print("dbfs: {}, value: {}".format(dbfs, sample_value))
+    return sample_value
 
 def audible_chunks(tagged_segments):
     '''
@@ -365,15 +377,13 @@ def remove_silences(input_file, output_file, bypass_file=None):
     logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
-    delta_limits = (2**7, 2**4) # whisper level
-    delta_limits = (2**11, 2**8) # conversational level
-    delta_limits = (2**9, 2**6) # quiet level
+    delta_limits = (
+        dbfs_to_sample_value(SILENCE_PEAK_LIMIT, input_wave.getsampwidth()),
+        dbfs_to_sample_value(SILENCE_IQR_LIMIT, input_wave.getsampwidth())
+    )
 
-    conversion = 2.0**(input_wave.getsampwidth() * 8) / 2**16
-    converted_delta_limits = conversion * delta_limits[0], conversion * delta_limits[1]
-
-    logging.debug("16 bit delta limits: {0}".format(delta_limits))
-    logging.debug("{0} bit delta limits: {1}".format(input_wave.getsampwidth() * 8, converted_delta_limits))
+    logging.debug("dbFS delta limits: {0}".format(delta_limits))
+    logging.debug("{0} bit delta limits: {1}".format(input_wave.getsampwidth() * 8, delta_limits))
 
     try:
         for silent_segment, segment in \
@@ -381,7 +391,7 @@ def remove_silences(input_file, output_file, bypass_file=None):
                 tag_segments(
                     tag_chunks(
                         chunked_samples(input_wave, CHUNK_MS / 1000.0),
-                        converted_delta_limits
+                        delta_limits
                     )
                 )
             ):
@@ -423,16 +433,29 @@ def main(*argv):
         help='Filename to write to.'
     )
     parser.add_argument(
-        '--silence-min',
-        type=int,
-        default=SILENCE_MIN,
-        help='Minimum wave sample value to consider silence.'
+        '--whisper',
+        action='store_true',
+        help='Use "whisper" noise detection sensitivity presets.'
     )
     parser.add_argument(
-        '--silence-max',
-        type=int,
-        default=SILENCE_MAX,
-        help='Maximum wave sample value to consider silence.'
+        '--quiet',
+        action='store_true',
+        help='Use "quiet" noise detection sensitivity presets. This is the default setting.'
+    )
+    parser.add_argument(
+        '--conversational',
+        action='store_true',
+        help='Use "conversational" noise detection sensitivity presets.'
+    )
+    parser.add_argument(
+        '--silence-peak-limit',
+        type=float,
+        help='Peak sample level, in dbFS (thus negative), to consider a sample "silent." Overrides preset values.'
+    )
+    parser.add_argument(
+        '--silence-iqr-limit',
+        type=float,
+        help='50th percential sample level, in dbFS (thus negative), to consider a sample "silent." Overrides preset values.'
     )
     parser.add_argument(
         '--input-big-endian',
@@ -443,7 +466,7 @@ def main(*argv):
         '--input-override-signedness',
         choices=("unsigned", "signed"),
         default=None,
-        help='Ignore the Wave spec and interpres input with given signedness. Not recommended.'
+        help='Ignore the Wave spec and interpret input with given signedness. Not recommended.'
     )
     args = parser.parse_args(argv[1:])
 
@@ -456,7 +479,19 @@ def main(*argv):
     if args.bypass_filename is not None:
         bypass_file = open(args.bypass_filename, 'wb')
 
-    with silence_limits(args.silence_min, args.silence_max):
+    if args.whisper:
+        delta_limits = SILENCE_PRESET_LIMITS['whisper']
+    elif args.whisper:
+        delta_limits = SILENCE_PRESET_LIMITS['conversational']
+    else:
+        delta_limits = SILENCE_PRESET_LIMITS['quiet']
+
+    if args.silence_peak_limit:
+        delta_limits[0] = args.silence_peak_limit
+    if args.silence_iqr_limit:
+        delta_limits[1] = args.silence_iqr_limit
+
+    with silence_limits(*delta_limits):
         with input_endianness('big' if args.input_big_endian else 'little'):
             with input_signedness(args.input_override_signedness):
                 with open(output_filename, 'wb') as output_file:
