@@ -86,10 +86,10 @@ def input_signedness(val):
 def silence_limits(peak, iqr):
     '''Override SILENCE_PEAK_LIMIT and SILENCE_IQR_LIMIT globals.'''
     global SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT
-    old_min, old_max = SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT 
+    old_peak, old_iqr = SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT 
     SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = peak, iqr
     yield
-    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = old_min, old_max
+    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = old_peak, old_iqr
 
 class NoiseFilter(object):
     def __init__(self):
@@ -146,7 +146,7 @@ def tag_segments(tagged_chunks):
     Note that this does not tag based strictly on whether the current chunk is silent
     or audible; rather it tags *which type of segment* the chunk belongs to. 
     '''
-    logging.info("Config: CHUNK_MS: {}, HYSTERESIS_CHUNKS: {}, PRE_ROLL_CHUNKS: {}, POST_ROLL_CHUNKS: {}".format(
+    logging.info("CHUNK_MS: {0}, HYSTERESIS_CHUNKS: {1}, PRE_ROLL_CHUNKS: {2}, POST_ROLL_CHUNKS: {3}".format(
         CHUNK_MS, HYSTERESIS_CHUNKS, PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS
     ))
     buffer = RingBuffer(maxlen=max(PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS))
@@ -154,12 +154,14 @@ def tag_segments(tagged_chunks):
     hysteresis_counter = 0
     for chunk_silent, chunk_samples, chunk_frames in tagged_chunks:
         if chunk_silent != segment_silent:
-#            print "Bump hysteresis, saw {} in {} segment".format("silence" if chunk_silent else "audible",
-#                "silent" if segment_silent else "audible")
+#            logging.debug("Bump hysteresis, saw {0} in {1} segment".format(
+#                "silence" if chunk_silent else "audible",
+#                "silent" if segment_silent else "audible"
+#             ))
             hysteresis_counter += 1
         else:
 #            if hysteresis_counter > 10:
-#                print "Hysteresis counter reset"
+#                logging.debug("Hysteresis counter reset")
             if not segment_silent:
                 # dump buffered silent frames so we don't lose silence in middle of audible
                 for frames in buffer:
@@ -170,7 +172,7 @@ def tag_segments(tagged_chunks):
         if (segment_silent and not chunk_silent) or\
             hysteresis_counter >= HYSTERESIS_CHUNKS:
 
-            print hysteresis_counter
+#            logging.debug("Changing state, hysteresis counter: {0}".format(hysteresis_counter))
 
             # changing state if we see any audible chunks 
             # or more than HYSTERESIS_CHUNKS silent chunks
@@ -231,7 +233,7 @@ def tag_segments(tagged_chunks):
     # ideally would run back through state change loop one more time
     # for now, just dump out attached to current segment
     for frames in buffer:
-        print "dumping left-over frames at end of file."
+        logging.debug("Dumping left-over frames at end of file.")
         yield segment_silent, frames
 
 def tag_chunks(chunk_gen, silence_deltas):
@@ -258,12 +260,10 @@ def tag_chunks(chunk_gen, silence_deltas):
 
         md, iqrd = max_ - min_, q3 - q1
 
-        #logging.debug('max_delta: {0}, iqr_delta: {1}, silence: {2}'.format(max_ - min_, q3 - q1, silence))
-#        logging.debug('{}% {}%, ({}, {}), silence: {}'.format(
+#        logging.debug('{0}% {1}%, ({2}, {3}), silence: {4}'.format(
 #            int(100 * float(max_ - min_) / max_delta), 
 #            int(100 * float(q3 - q1) / iqr_delta), 
-#            md, iqrd,
-#            silence
+#            md, iqrd, silence
 #        ))
 
         yield silence, chunk_samples, chunk_frames
@@ -382,7 +382,7 @@ def remove_silences(input_file, output_file, bypass_file=None):
         dbfs_to_sample_value(SILENCE_IQR_LIMIT, input_wave.getsampwidth())
     )
 
-    logging.debug("dbFS delta limits: {0}".format(delta_limits))
+    logging.debug("dBFS delta limits: {0}".format(delta_limits))
     logging.debug("{0} bit delta limits: {1}".format(input_wave.getsampwidth() * 8, delta_limits))
 
     try:
@@ -450,12 +450,12 @@ def main(*argv):
     parser.add_argument(
         '--silence-peak-limit',
         type=float,
-        help='Peak sample level, in dbFS (thus negative), to consider a sample "silent." Overrides preset values.'
+        help='Peak sample level, in dBFS (thus negative), to consider a sample "silent." Overrides preset values.'
     )
     parser.add_argument(
         '--silence-iqr-limit',
         type=float,
-        help='50th percential sample level, in dbFS (thus negative), to consider a sample "silent." Overrides preset values.'
+        help='50th percential sample level, in dBFS (thus negative), to consider a sample "silent." Overrides preset values.'
     )
     parser.add_argument(
         '--input-big-endian',
