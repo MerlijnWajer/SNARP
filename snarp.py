@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# coding=utf8
 #
 # snarp - Simple Noise Activated Recording in Python
 #
@@ -32,9 +33,16 @@ import argparse
 import contextlib
 import itertools
 import collections
+import math
 
-SILENCE_MIN = 120
-SILENCE_MAX = 135
+SILENCE_PRESET_LIMITS = {
+    'conversational': (-15, -24),
+    'quiet': (-21, -30),
+    'whisper': (-27, -36),
+}
+
+# todo: remove global setting and pass in to remove_silences() explicitly?
+SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = SILENCE_PRESET_LIMITS['quiet']
 
 # Global vars for Wave format metadata
 # Usually these are fixed by the format (little, 8 bit -> unsigned, > 8 bit signed), 
@@ -48,10 +56,10 @@ INPUT_SIGNEDNESS = None # None means permit Wave format rules to prevail
 # parameters. Note that all times must be multiples of CHUNK_MS, since
 # all audio processing is done in blocks of length CHUNK_MS. 
 # 
-CHUNK_MS      = 1000   # milliseconds per silence analysis period
-HYSTERESIS_MS = 3000 # ms of silence before we decide audible segment is over
-PRE_ROLL_MS   = 1000  # ms of silence to play at beginning of audible segment
-POST_ROLL_MS  = 1000  # ms of silence to play at end of audible segment
+CHUNK_MS      = 100   # milliseconds per silence analysis period
+HYSTERESIS_MS = 1000 # ms of silence before we decide audible segment is over
+PRE_ROLL_MS   = 200  # ms of silence to play at beginning of audible segment
+POST_ROLL_MS  = 100  # ms of silence to play at end of audible segment
 
 HYSTERESIS_CHUNKS = int(float(HYSTERESIS_MS) / CHUNK_MS)
 PRE_ROLL_CHUNKS   = int(float(PRE_ROLL_MS) / CHUNK_MS)
@@ -77,13 +85,37 @@ def input_signedness(val):
     INPUT_SIGNEDNESS = previous
 
 @contextlib.contextmanager
-def silence_limits(min_, max_):
-    '''Override SILENCE_MIN and SILENCE_MAX globals.'''
-    global SILENCE_MIN, SILENCE_MAX
-    old_min, old_max = SILENCE_MIN, SILENCE_MAX
-    SILENCE_MIN, SILENCE_MAX = min_, max_
+def silence_limits(peak, iqr):
+    '''Override SILENCE_PEAK_LIMIT and SILENCE_IQR_LIMIT globals.'''
+    global SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT
+    old_peak, old_iqr = SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT 
+    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = peak, iqr
     yield
-    SILENCE_MIN, SILENCE_MAX = old_min, old_max
+    SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = old_peak, old_iqr
+
+# disabled by defaults stats writer
+push_stats = lambda *args, **kwargs: None
+@contextlib.contextmanager
+def stats_file(f):
+    '''Toggle statistics recording'''
+    global push_stats
+    if isinstance(f, basestring):
+        f = open(f, "wb")
+    def push_stats_record(peak_delta, iqr_delta, sample_width):
+        if f:
+            f.write("{peak_delta},{iqr_delta}\n".format(
+                peak_delta=sample_delta_to_dbfs(peak_delta, sample_width),
+                iqr_delta=sample_delta_to_dbfs(iqr_delta, sample_width)
+            ))
+    old = push_stats
+    if f:
+        push_stats = push_stats_record
+    yield
+    push_stats = old
+    try:
+        f.close()
+    except Exception:
+        pass
 
 class NoiseFilter(object):
     def __init__(self):
@@ -96,6 +128,18 @@ class RingBuffer(collections.deque):
             discard = self.popleft()
         collections.deque.append(self, value)
         return discard
+
+def dbfs_to_sample_delta(dbfs, sample_width):
+    # convert dBFS to sample range based on our sample width in bytes
+    sample_delta = 10.0 ** (dbfs / 10.0) * 2.0 ** (sample_width * 8)
+    logging.debug("dbfs: {0}, delta: {1}".format(dbfs, sample_delta))
+    return sample_delta
+
+def sample_delta_to_dbfs(sample_delta, sample_width):
+    # convert sample value to dBFS based on our sample width in bytes
+    dbfs = math.log(max(sample_delta, 1) / 2.0 ** (sample_width * 8)) / math.log(10) * 10 
+    logging.debug("dbfs: {0}, delta: {1}".format(dbfs, sample_delta))
+    return dbfs
 
 def audible_chunks(tagged_segments):
     '''
@@ -134,7 +178,7 @@ def tag_segments(tagged_chunks):
     Note that this does not tag based strictly on whether the current chunk is silent
     or audible; rather it tags *which type of segment* the chunk belongs to. 
     '''
-    logging.info("Config: CHUNK_MS: {}, HYSTERESIS_CHUNKS: {}, PRE_ROLL_CHUNKS: {}, POST_ROLL_CHUNKS: {}".format(
+    logging.info("CHUNK_MS: {0}, HYSTERESIS_CHUNKS: {1}, PRE_ROLL_CHUNKS: {2}, POST_ROLL_CHUNKS: {3}".format(
         CHUNK_MS, HYSTERESIS_CHUNKS, PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS
     ))
     buffer = RingBuffer(maxlen=max(PRE_ROLL_CHUNKS, POST_ROLL_CHUNKS))
@@ -142,24 +186,25 @@ def tag_segments(tagged_chunks):
     hysteresis_counter = 0
     for chunk_silent, chunk_samples, chunk_frames in tagged_chunks:
         if chunk_silent != segment_silent:
-#            print "Bump hysteresis, saw {} in {} segment".format("silence" if chunk_silent else "audible",
-#                "silent" if segment_silent else "audible")
+#            logging.debug("Bump hysteresis, saw {0} in {1} segment".format(
+#                "silence" if chunk_silent else "audible",
+#                "silent" if segment_silent else "audible"
+#             ))
             hysteresis_counter += 1
         else:
 #            if hysteresis_counter > 10:
-#                print "Hysteresis counter reset"
+#                logging.debug("Hysteresis counter reset")
             if not segment_silent:
                 # dump buffered silent frames so we don't lose silence in middle of audible
                 for frames in buffer:
                     yield False, frames
                 buffer.clear()
             hysteresis_counter = 0
-
         # four cases: changing state/not changing state X silent chunk/audible chunk
         if (segment_silent and not chunk_silent) or\
             hysteresis_counter >= HYSTERESIS_CHUNKS:
 
-            print hysteresis_counter
+#            logging.debug("Changing state, hysteresis counter: {0}".format(hysteresis_counter))
 
             # changing state if we see any audible chunks 
             # or more than HYSTERESIS_CHUNKS silent chunks
@@ -170,13 +215,13 @@ def tag_segments(tagged_chunks):
 
                 # first, take any extra buffer and append to silent segment
                 for i in range(len(buffer) - PRE_ROLL_CHUNKS):
-                    logging.debug("Dumped excess buffer chunk to silent segment.")
+                    #logging.debug("Dumped excess buffer chunk to silent segment.")
                     yield False, buffer.popleft()
                     
                 # write out remainder of buffer as pre-roll
                 logging.debug("Pre-rolling...")
                 for frames in buffer:
-                    logging.debug("Pre-roll chunk written.")
+                    #logging.debug("Pre-roll chunk written.")
                     yield False, frames
                 buffer.clear()
 
@@ -189,7 +234,7 @@ def tag_segments(tagged_chunks):
                 # first few buffered chunks go to end of audible segment
                 for i in range(POST_ROLL_CHUNKS):
                     if len(buffer) > 0:
-                        logging.debug("Post-roll chunk written.")
+                        #logging.debug("Post-roll chunk written.")
                         yield False, buffer.popleft()
 
                 # any remaining buffer chunks should go to the silent segment
@@ -220,24 +265,45 @@ def tag_segments(tagged_chunks):
     # ideally would run back through state change loop one more time
     # for now, just dump out attached to current segment
     for frames in buffer:
-        print "dumping left-over frames at end of file."
+        logging.debug("Dumping left-over frames at end of file.")
         yield segment_silent, frames
 
-def tag_chunks(chunk_gen):
+def tag_chunks(chunk_gen, silence_deltas, sample_width):
     '''
     Tag each chunk in the generator as silent (True) or audible (False)
 
     Returns tuple of (chunk_silent, chunk_samples, chunk_frames)
     '''
+    max_delta, iqr_delta = silence_deltas
     for chunk_samples, chunk_frames in chunk_gen:
         if len(chunk_samples) == 0:
             break
 
-        min_, max_ = min(chunk_samples), max(chunk_samples)
-        audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
+        samples = sorted(chunk_samples)
+        count = len(samples)
+        first, last = samples[:int(count/2)], samples[int(count/2):]
+        q1, q3 = first[int(len(first)/2):][0], last[int(len(last)/2):][0]
+
+        min_, max_ = samples[0], samples[count - 1]
+        #audible = min_ < SILENCE_MIN and SILENCE_MAX < max_
+        audible = max_ - min_ > max_delta
+        audible = audible or q3 - q1 > iqr_delta
         silence = not audible
 
-        logging.debug('min: {0} max: {1} silence: {2}'.format(min_, max_, silence))
+        md, iqrd = max_ - min_, q3 - q1
+
+#        logging.debug('{0}% {1}%, ({2}, {3}), silence: {4}'.format(
+#            int(100 * float(max_ - min_) / max_delta), 
+#            int(100 * float(q3 - q1) / iqr_delta), 
+#            md, iqrd, silence
+#        ))
+
+        # record per-frame stats – function is noop if stats are off
+        push_stats(
+            peak_delta=max_-min_,
+            iqr_delta=q3-q1,
+            sample_width=sample_width
+        )
 
         yield silence, chunk_samples, chunk_frames
 
@@ -286,35 +352,9 @@ def frame_to_sample(frame, sample_width, signed_data):
     sample_width  sample width in bytes
     signed_data   True if wave data is signed, false if unsigned
     '''
+    # todo: accept nchannels and decode all channels
     # handling only the first channel
     frame_data = frame[0:sample_width]
-
-    # Padding all samples to 4byte integer
-    if sample_width < 4:
-
-        if INPUT_ENDIANNESS == 'little':
-            frame_data_MSB = frame_data[sample_width - 1]
-        else:
-            frame_data_MSB = frame_data[0]
-
-        # Check if positive or negative and set the MSB accordigly
-        if ord(frame_data_MSB) & 0x80:
-            padding_MSB = '\xff'
-            frame_data_MSB = chr(ord(frame_data_MSB) & ~0x80)
-        else:
-            padding_MSB = '\x00'
-
-        # Set the middle padding
-        padding = '\x00' * (4 - sample_width - 1)
-
-        if INPUT_ENDIANNESS == 'little':
-            try:
-                frame_data = frame_data + padding + padding_MSB
-            except Exception,e:
-                import pdb
-                pdb.set_trace()
-        else:
-            frame_data = padding_MSB + padding + frame_data
 
     fmt = ''
     if INPUT_ENDIANNESS == 'little':
@@ -323,9 +363,9 @@ def frame_to_sample(frame, sample_width, signed_data):
         fmt += '>'
 
     if signed_data:
-        fmt += 'l'
+        fmt += {4:'l', 2:'h', 1:'b'}[sample_width]
     else:
-        fmt += 'L'
+        fmt += {4:'L', 2:'H', 1:'B'}[sample_width]
 
     sample = struct.unpack(fmt, frame_data)
     return sample[0]
@@ -376,13 +416,22 @@ def remove_silences(input_file, output_file, bypass_file=None):
     logging.debug('Input wave params: {0}'.format(input_wave.getparams()))
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
+    delta_limits = (
+        dbfs_to_sample_delta(SILENCE_PEAK_LIMIT, input_wave.getsampwidth()),
+        dbfs_to_sample_delta(SILENCE_IQR_LIMIT, input_wave.getsampwidth())
+    )
+
+    logging.debug("dBFS delta limits: {0}".format(delta_limits))
+    logging.debug("{0} bit delta limits: {1}".format(input_wave.getsampwidth() * 8, delta_limits))
 
     try:
         for silent_segment, segment in \
             segmenter(
                 tag_segments(
                     tag_chunks(
-                        chunked_samples(input_wave, CHUNK_MS / 1000.0)
+                        chunked_samples(input_wave, CHUNK_MS / 1000.0),
+                        delta_limits,
+                        sample_width=input_wave.getsampwidth()
                     )
                 )
             ):
@@ -424,16 +473,29 @@ def main(*argv):
         help='Filename to write to.'
     )
     parser.add_argument(
-        '--silence-min',
-        type=int,
-        default=SILENCE_MIN,
-        help='Minimum wave sample value to consider silence.'
+        '--whisper',
+        action='store_true',
+        help='Use "whisper" noise detection sensitivity presets.'
     )
     parser.add_argument(
-        '--silence-max',
-        type=int,
-        default=SILENCE_MAX,
-        help='Maximum wave sample value to consider silence.'
+        '--quiet',
+        action='store_true',
+        help='Use "quiet" noise detection sensitivity presets. This is the default setting.'
+    )
+    parser.add_argument(
+        '--conversational',
+        action='store_true',
+        help='Use "conversational" noise detection sensitivity presets.'
+    )
+    parser.add_argument(
+        '--silence-peak-limit',
+        type=float,
+        help='Peak sample level, in dBFS (thus negative), to consider a sample "silent." Overrides preset values.'
+    )
+    parser.add_argument(
+        '--silence-iqr-limit',
+        type=float,
+        help='50th percential sample level, in dBFS (thus negative), to consider a sample "silent." Overrides preset values.'
     )
     parser.add_argument(
         '--input-big-endian',
@@ -444,7 +506,12 @@ def main(*argv):
         '--input-override-signedness',
         choices=("unsigned", "signed"),
         default=None,
-        help='Ignore the Wave spec and interpres input with given signedness. Not recommended.'
+        help='Ignore the Wave spec and interpret input with given signedness. Not recommended.'
+    )
+    parser.add_argument(
+        '--stats-file',
+        default=None,
+        help='Record '
     )
     args = parser.parse_args(argv[1:])
 
@@ -457,11 +524,24 @@ def main(*argv):
     if args.bypass_filename is not None:
         bypass_file = open(args.bypass_filename, 'wb')
 
-    with silence_limits(args.silence_min, args.silence_max):
-        with input_endianness('big' if args.input_big_endian else 'little'):
-            with input_signedness(args.input_override_signedness):
-                with open(output_filename, 'wb') as output_file:
-                    remove_silences(input_file, output_file, bypass_file)
+    if args.whisper:
+        delta_limits = SILENCE_PRESET_LIMITS['whisper']
+    elif args.whisper:
+        delta_limits = SILENCE_PRESET_LIMITS['conversational']
+    else:
+        delta_limits = SILENCE_PRESET_LIMITS['quiet']
+
+    if args.silence_peak_limit:
+        delta_limits[0] = args.silence_peak_limit
+    if args.silence_iqr_limit:
+        delta_limits[1] = args.silence_iqr_limit
+
+    with silence_limits(*delta_limits):
+        with stats_file(args.stats_file):
+            with input_endianness('big' if args.input_big_endian else 'little'):
+                with input_signedness(args.input_override_signedness):
+                    with open(output_filename, 'wb') as output_file:
+                        remove_silences(input_file, output_file, bypass_file)
 
     return 0
 
