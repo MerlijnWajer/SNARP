@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# coding=utf8
 #
 # snarp - Simple Noise Activated Recording in Python
 #
@@ -32,6 +33,7 @@ import argparse
 import contextlib
 import itertools
 import collections
+import math
 
 SILENCE_PRESET_LIMITS = {
     'conversational': (-15, -24),
@@ -91,6 +93,30 @@ def silence_limits(peak, iqr):
     yield
     SILENCE_PEAK_LIMIT, SILENCE_IQR_LIMIT = old_peak, old_iqr
 
+# disabled by defaults stats writer
+push_stats = lambda *args, **kwargs: None
+@contextlib.contextmanager
+def stats_file(f):
+    '''Toggle statistics recording'''
+    global push_stats
+    if isinstance(f, basestring):
+        f = open(f, "wb")
+    def push_stats_record(peak_delta, iqr_delta, sample_width):
+        if f:
+            f.write("{peak_delta},{iqr_delta}\n".format(
+                peak_delta=sample_delta_to_dbfs(peak_delta, sample_width),
+                iqr_delta=sample_delta_to_dbfs(iqr_delta, sample_width)
+            ))
+    old = push_stats
+    if f:
+        push_stats = push_stats_record
+    yield
+    push_stats = old
+    try:
+        f.close()
+    except Exception:
+        pass
+
 class NoiseFilter(object):
     def __init__(self):
         pass
@@ -103,11 +129,17 @@ class RingBuffer(collections.deque):
         collections.deque.append(self, value)
         return discard
 
-def dbfs_to_sample_value(dbfs, sample_width):
-    # convert dbFS to sample values based on our sample width in bytes
-    sample_value = 10.0 ** (dbfs / 10.0) * 2.0 ** (sample_width * 8)
-    print("dbfs: {}, value: {}".format(dbfs, sample_value))
-    return sample_value
+def dbfs_to_sample_delta(dbfs, sample_width):
+    # convert dBFS to sample range based on our sample width in bytes
+    sample_delta = 10.0 ** (dbfs / 10.0) * 2.0 ** (sample_width * 8)
+    logging.debug("dbfs: {0}, delta: {1}".format(dbfs, sample_delta))
+    return sample_delta
+
+def sample_delta_to_dbfs(sample_delta, sample_width):
+    # convert sample value to dBFS based on our sample width in bytes
+    dbfs = math.log(max(sample_delta, 1) / 2.0 ** (sample_width * 8)) / math.log(10) * 10 
+    logging.debug("dbfs: {0}, delta: {1}".format(dbfs, sample_delta))
+    return dbfs
 
 def audible_chunks(tagged_segments):
     '''
@@ -236,7 +268,7 @@ def tag_segments(tagged_chunks):
         logging.debug("Dumping left-over frames at end of file.")
         yield segment_silent, frames
 
-def tag_chunks(chunk_gen, silence_deltas):
+def tag_chunks(chunk_gen, silence_deltas, sample_width):
     '''
     Tag each chunk in the generator as silent (True) or audible (False)
 
@@ -265,6 +297,13 @@ def tag_chunks(chunk_gen, silence_deltas):
 #            int(100 * float(q3 - q1) / iqr_delta), 
 #            md, iqrd, silence
 #        ))
+
+        # record per-frame stats – function is noop if stats are off
+        push_stats(
+            peak_delta=max_-min_,
+            iqr_delta=q3-q1,
+            sample_width=sample_width
+        )
 
         yield silence, chunk_samples, chunk_frames
 
@@ -378,8 +417,8 @@ def remove_silences(input_file, output_file, bypass_file=None):
     logging.debug('Frame rate: {0} Hz'.format(input_wave.getframerate()))
 
     delta_limits = (
-        dbfs_to_sample_value(SILENCE_PEAK_LIMIT, input_wave.getsampwidth()),
-        dbfs_to_sample_value(SILENCE_IQR_LIMIT, input_wave.getsampwidth())
+        dbfs_to_sample_delta(SILENCE_PEAK_LIMIT, input_wave.getsampwidth()),
+        dbfs_to_sample_delta(SILENCE_IQR_LIMIT, input_wave.getsampwidth())
     )
 
     logging.debug("dBFS delta limits: {0}".format(delta_limits))
@@ -391,7 +430,8 @@ def remove_silences(input_file, output_file, bypass_file=None):
                 tag_segments(
                     tag_chunks(
                         chunked_samples(input_wave, CHUNK_MS / 1000.0),
-                        delta_limits
+                        delta_limits,
+                        sample_width=input_wave.getsampwidth()
                     )
                 )
             ):
@@ -468,6 +508,11 @@ def main(*argv):
         default=None,
         help='Ignore the Wave spec and interpret input with given signedness. Not recommended.'
     )
+    parser.add_argument(
+        '--stats-file',
+        default=None,
+        help='Record '
+    )
     args = parser.parse_args(argv[1:])
 
     input_filename = args.input_filename
@@ -492,10 +537,11 @@ def main(*argv):
         delta_limits[1] = args.silence_iqr_limit
 
     with silence_limits(*delta_limits):
-        with input_endianness('big' if args.input_big_endian else 'little'):
-            with input_signedness(args.input_override_signedness):
-                with open(output_filename, 'wb') as output_file:
-                    remove_silences(input_file, output_file, bypass_file)
+        with stats_file(args.stats_file):
+            with input_endianness('big' if args.input_big_endian else 'little'):
+                with input_signedness(args.input_override_signedness):
+                    with open(output_filename, 'wb') as output_file:
+                        remove_silences(input_file, output_file, bypass_file)
 
     return 0
 
